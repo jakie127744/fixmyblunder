@@ -1,0 +1,18 @@
+{
+  "id": "/",
+  "name": "Blunderprint",
+  "short_name": "Blunderprint",
+  "description": "Find the three mistakes you keep repeating, then drill exactly those.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f1f4f0",
+  "theme_color": "#2a6a46",
+  "categories": ["games", "education"],
+  "icons": [
+    { "src": "/img/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/img/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/img/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
