@@ -267,7 +267,7 @@ function viewToday() {
         <section class="card" style="flex:1"><div class="big">${minutesTrained(s, weekStart(Date.now()))}</div><p class="sub small" style="margin-top:6px">minutes trained this week</p></section>
       </div>
     </div>
-    <div class="cta"><button class="btn" data-act="start-set">${allDone ? 'See this week’s report' : doneN ? 'Continue today’s set' : 'Start today’s set'}</button></div>
+    ${allDone ? '' : `<div class="cta"><button class="btn" data-act="start-set">${doneN ? 'Continue today’s set' : 'Start today’s set'}</button></div>`}
   </section>`;
 }
 
@@ -287,7 +287,7 @@ function viewDiagnose() {
       ${s.staleMistakes ? `<div class="card" style="background:var(--amber-soft);border-color:transparent"><p><b>${plural(s.staleMistakes, 'older mistake')}</b> use the previous labels. Delete your data in Settings and import again to refresh them.</p></div>` : ''}
       ${withData.length ? withData.map((p, i) => patCard(p, max, i + 1)).join('') : '<div class="card"><p>No mistakes found. Great games, or import more.</p></div>'}
       <section class="card"><h2 class="h2">Recent games</h2><p class="sub small" style="margin:2px 0 6px">Tap a game to step through its biggest mistakes.</p>
-        ${games.map((g) => `<div class="game" data-act="review" data-id="${esc(g.id)}" role="button" tabindex="0"><span class="acc ${accClass(g.accuracy)}" title="Accuracy">${Math.round(g.accuracy)}</span><span><b>${g.result === 'win' ? 'Won' : g.result === 'loss' ? 'Lost' : 'Drew'}</b> as ${g.color} vs ${esc(g.opponent)}<small>${fmtDay(g.date)}${g.speed ? ' · ' + esc(g.speed) : ''} · ${plural(g.mistakes.length, 'mistake')}</small></span>${g.url ? `<a class="small" href="${esc(g.url)}" target="_blank" rel="noopener">Open</a>` : ''}</div>`).join('') || '<p class="sub">No games yet.</p>'}
+        ${games.map((g) => `<div class="game" data-act="review" data-id="${esc(g.id)}" role="button" tabindex="0"><span class="acc ${accClass(g.accuracy)}" title="Accuracy">${Math.round(g.accuracy)}</span><span><b>${g.result === 'win' ? 'Won' : g.result === 'loss' ? 'Lost' : 'Drew'}</b> as ${g.color} vs ${esc(g.opponent)}<small>${fmtDay(g.date)}${g.speed ? ' · ' + esc(g.speed) : ''} · ${plural(g.mistakes.length, 'mistake')}</small></span><span class="small sub" aria-hidden="true">Review ›</span></div>`).join('') || '<p class="sub">No games yet.</p>'}
       </section>
     </div>
   </section>`;
@@ -298,7 +298,7 @@ function seePattern(id) {
   const items = Object.values(s.games).flatMap((g) => g.mistakes.filter((m) => m.pattern === id).map((m) => ({ g, m })))
     .sort((a, b) => b.g.date - a.g.date).slice(0, 40);
   openSheet(`<h2 class="h2">${esc(nameOf(id))}</h2><p class="sub small" style="margin:4px 0 8px">${esc(PATTERNS[id].blurb)}</p>
-    ${items.map(({ g, m }) => `<div class="mrow"><b>${esc(m.playedSan)} on move ${Math.ceil(m.ply / 2 + 0.5)}</b><span class="tag bad">−${Math.round(m.wpLoss)}%</span><small>${fmtDay(g.date)} vs ${esc(g.opponent)}</small>${g.url ? `<a class="small" href="${esc(g.url)}#${m.ply + 1}" target="_blank" rel="noopener">Game</a>` : '<span></span>'}</div>`).join('') || '<p class="sub">Nothing here.</p>'}
+    ${items.map(({ g, m }) => `<div class="mrow"><b>${esc(m.playedSan)} on move ${Math.ceil(m.ply / 2 + 0.5)}</b><span class="tag bad">−${Math.round(m.wpLoss)}%</span><small>${fmtDay(g.date)} vs ${esc(g.opponent)}</small><button class="link" data-act="review" data-id="${esc(g.id)}" data-ply="${m.ply}" style="min-height:36px;padding:2px 6px">Review</button></div>`).join('') || '<p class="sub">Nothing here.</p>'}
     <button class="btn ghost" style="margin-top:14px" data-act="close">Close</button>`);
 }
 
@@ -733,7 +733,7 @@ const keyMoments = (g) => g.mistakes.filter((m) => m.wpLoss >= 12).sort((a, b) =
 const moveNo = (ply) => Math.floor(ply / 2) + 1;
 const rvKey = (rv) => (rv.mode === 'full' ? rv.keys.find((m) => m.ply === rv.p) : rv.keys[rv.p]);
 
-function openReview(id) {
+function openReview(id, ply) {
   const g = state().games[id];
   if (!g) return;
   const rv = { id, p: 0, shown: '', keys: keyMoments(g), mode: g.sans ? 'full' : 'moments', fens: [], moves: [] };
@@ -744,6 +744,10 @@ function openReview(id) {
       try { const m = c.move(san); rv.moves.push({ from: m.from, to: m.to, san: m.san }); rv.fens.push(c.fen()); } catch { break; }
     }
     rv.p = rv.keys.length ? rv.keys[0].ply : 0;
+    if (ply != null && ply >= 0 && ply < rv.fens.length) rv.p = ply;
+  } else if (ply != null) {
+    const i = rv.keys.findIndex((k) => k.ply === ply);
+    if (i >= 0) rv.p = i;
   }
   ui.review = rv;
   render(); window.scrollTo(0, 0);
@@ -910,7 +914,7 @@ document.addEventListener('click', async (e) => {
       startSession(ids, nameOf(v)); break;
     }
     case 'see-pattern': seePattern(v); break;
-    case 'review': openReview(t.dataset.id); break;
+    case 'review': closeSheet(); ui.tab = 'diagnose'; openReview(t.dataset.id, t.dataset.ply != null ? +t.dataset.ply : undefined); break;
     case 'rv-back': ui.review = null; render(); break;
     case 'rv-km': { const rv = ui.review; rv.p = rv.mode === 'full' ? rv.keys[+v].ply : +v; rv.shown = ''; render(); break; }
     case 'rv-prev': reviewStep(-1); break;
