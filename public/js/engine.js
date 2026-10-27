@@ -2,6 +2,8 @@
 // Web Worker in the browser and over a child process in the Node tests.
 import { clamp } from './score.js';
 
+const STALL_MS = 20000;   // one position never takes this long; if it does, the worker is stuck
+
 export class Engine {
   constructor(transport) {
     this.t = transport;
@@ -9,11 +11,22 @@ export class Engine {
     this.cur = null;
     this.ready = null;
     this.t.onLine((l) => this._line(l));
+    if (this.t.onError) this.t.onError((err) => this._fail(err));
+  }
+
+  /** The worker crashed or never started. Reject whatever is waiting so analysis stops instead of hanging. */
+  _fail(err) {
+    this.failed = err instanceof Error ? err : new Error(String(err));
+    const cur = this.cur; this.cur = null;
+    if (cur) { clearTimeout(cur.timer); cur.rej(this.failed); }
+    if (this._readyRej) this._readyRej(this.failed);
+    this._readyRej = null;
+    if (this.onFail) this.onFail(this.failed);
   }
 
   init() {
     if (!this.ready) {
-      this.ready = new Promise((res) => { this._readyRes = res; });
+      this.ready = new Promise((res, rej) => { this._readyRes = res; this._readyRej = rej; });
       this.t.post('uci');
     }
     return this.ready;
@@ -26,7 +39,7 @@ export class Engine {
       this.t.post('isready');
     } else if (l === 'readyok') {
       if (this._readyRes) this._readyRes();
-      this._readyRes = null;
+      this._readyRes = null; this._readyRej = null;
     } else if (this.cur) {
       if (l.startsWith('info') && / score /.test(l) && / pv /.test(l)) {
         if (/ multipv (\d+)/.test(l) && RegExp.$1 !== '1') return;
@@ -40,6 +53,7 @@ export class Engine {
         const info = this.cur.info;
         const best = l.split(/\s+/)[1];
         const res = this.cur.res;
+        clearTimeout(this.cur.timer);
         this.cur = null;
         if (!info) { res({ cp: 0, cpc: 0, mate: null, best: best === '(none)' ? null : best, pv: [], depth: 0 }); return; }
         const mate = info.kind === 'mate' ? info.val : null;
@@ -55,9 +69,11 @@ export class Engine {
   /** Evaluate from the side to move's point of view. */
   evaluate(fen, opts = {}) {
     const run = async () => {
+      if (this.failed) throw this.failed;
       await this.init();
-      return new Promise((res) => {
-        this.cur = { res, info: null };
+      return new Promise((res, rej) => {
+        const timer = setTimeout(() => this._fail(new Error('The engine stopped answering.')), STALL_MS);
+        this.cur = { res, rej, timer, info: null };
         this.t.post('position fen ' + fen);
         this.t.post(opts.depth ? `go depth ${opts.depth}` : `go movetime ${opts.movetime || 80}`);
       });
@@ -73,7 +89,9 @@ export class Engine {
 
 export function workerTransport(url) {
   const w = new Worker(url);
-  const cbs = [];
+  const cbs = [], errs = [];
   w.onmessage = (e) => { if (typeof e.data === 'string') cbs.forEach((f) => f(e.data)); };
-  return { post: (c) => w.postMessage(c), onLine: (f) => cbs.push(f), terminate: () => w.terminate() };
+  w.onerror = (e) => errs.forEach((f) => f(new Error(e.message || 'The engine failed to load.')));
+  w.onmessageerror = () => errs.forEach((f) => f(new Error('The engine sent an unreadable message.')));
+  return { post: (c) => w.postMessage(c), onLine: (f) => cbs.push(f), onError: (f) => errs.push(f), terminate: () => w.terminate() };
 }

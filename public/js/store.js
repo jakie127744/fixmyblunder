@@ -4,7 +4,7 @@ const KEY = 'blunderprint.v1';
 const blank = () => ({
   v: 1,
   profile: null,               // { source, username, createdAt }
-  settings: { setSize: 5, engineMs: 70, gamesToImport: 25, theme: 'system' },
+  settings: { setSize: 5, engineMs: 70, gamesToImport: 25, theme: 'system', reminderTime: '' },
   games: {},                   // id -> analysed game record (mistakes included)
   drills: {},                  // id -> drill (mistake + schedule)
   attempts: [],                // { t, id, ok, ms }

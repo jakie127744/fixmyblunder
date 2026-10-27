@@ -15,11 +15,27 @@ export class Board {
     this.marks = {};       // square -> css class (hint, good, bad, last-from, last-to)
     this.drag = null;
     el.classList.add('board');
-    el.setAttribute('role', 'grid');
+    el.setAttribute('role', 'group');
     el.setAttribute('aria-label', 'Chess board');
+    // A hidden description: how to play with a keyboard or screen reader, and where every piece stands.
+    this.desc = document.createElement('p');
+    this.desc.className = 'sr'; this.desc.id = 'boardDesc';
+    document.querySelectorAll('#boardDesc').forEach((x) => x.remove());
+    el.before(this.desc);
+    el.setAttribute('aria-describedby', 'boardDesc');
     el.addEventListener('pointerdown', (e) => this._down(e));
     el.addEventListener('keydown', (e) => this._key(e));
     this.render();
+  }
+
+  say(msg) { const el = document.getElementById('sr'); if (el && msg) { el.textContent = ''; setTimeout(() => { el.textContent = msg; }, 60); } }
+
+  describe() {
+    const names = { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' };
+    const out = { w: [], b: [] };
+    for (const row of this.chess.board()) for (const c of row) if (c) out[c.color].push(`${names[c.type]} ${c.square}`);
+    const how = this.enabled ? 'Arrow keys move between squares. Enter picks up a piece, then Enter on a highlighted square to move it. Escape cancels. ' : '';
+    return `${how}${this.chess.turn() === 'w' ? 'White' : 'Black'} to move. White: ${out.w.join(', ')}. Black: ${out.b.join(', ')}.`;
   }
 
   setPosition(fen, orientation) {
@@ -63,11 +79,18 @@ export class Board {
       if (targets.has(q.sq)) cls.push(p ? 'cap' : 'dot');
       if (this.marks[q.sq]) cls.push('m-' + this.marks[q.sq]);
       if (inCheckSq === q.sq) cls.push('chk');
-      const label = `${q.sq}${p ? ' ' + (p.color === 'w' ? 'white ' : 'black ') + { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' }[p.type] : ''}`;
+        const say = { hint: 'hint', good: 'correct move', bad: 'wrong move', last: 'last move' }[this.marks[q.sq]];
+      const label = `${q.sq}${p ? ' ' + (p.color === 'w' ? 'white ' : 'black ') + { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' }[p.type] : ', empty'}${this.sel === q.sq ? ', selected' : ''}${targets.has(q.sq) ? (p ? ', capture' : ', legal move') : ''}${say ? ', ' + say : ''}${inCheckSq === q.sq ? ', in check' : ''}`;
       const coord = (q.ri === 7 ? `<i class="cf">${q.file}</i>` : '') + (q.fi === 0 ? `<i class="cr">${q.rank}</i>` : '');
-      h += `<button class="${cls.join(' ')}" data-sq="${q.sq}" role="gridcell" aria-label="${label}" tabindex="${q.sq === (this.sel || 'e4') ? 0 : -1}">${coord}${p ? `<img class="pc" alt="" draggable="false" src="img/pieces/${p.color}${p.type}.svg">` : ''}</button>`;
+      h += `<button class="${cls.join(' ')}" data-sq="${q.sq}" aria-label="${label}" tabindex="${q.sq === (this.sel || 'e4') ? 0 : -1}">${coord}${p ? `<img class="pc" alt="" draggable="false" src="img/pieces/${p.color}${p.type}.svg">` : ''}</button>`;
     }
     this.el.innerHTML = h;
+    this.desc.textContent = this.describe();
+  }
+
+  _selMsg(sq) {
+    const p = this.chess.get(sq), n = this.legalFrom(sq).length;
+    return `Picked up ${p.color === 'w' ? 'white' : 'black'} ${{ p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' }[p.type]} on ${sq}. ${n ? n + (n === 1 ? ' legal move.' : ' legal moves.') : 'No legal moves.'}`;
   }
 
   _kingSq(color) {
@@ -90,7 +113,7 @@ export class Board {
     const own = p && p.color === this.chess.turn();
     if (this.sel && this.sel !== sq && this.legalFrom(this.sel).some((m) => m.to === sq)) { this._try(this.sel, sq); return; }
     if (own) {
-      this.sel = sq; this.render();
+      this.sel = sq; this.render(); this.say(this._selMsg(sq));
       const img = this.el.querySelector(`[data-sq="${sq}"] .pc`);
       if (img && e.pointerType !== 'mouse' ? true : img) this._startDrag(e, img, sq);
     } else if (this.sel) { this.sel = null; this.render(); }
@@ -128,6 +151,7 @@ export class Board {
     if (!legal) { this.sel = null; this.render(); return; }
     const uci = from + to + (legal.promotion ? 'q' : '');
     this.sel = null;
+    this.say(`You played ${legal.san}.`);
     this.onMove(uci, legal.san, legal);
   }
 
@@ -146,7 +170,7 @@ export class Board {
       e.preventDefault();
       const p = this.chess.get(sq);
       if (this.sel && this.legalFrom(this.sel).some((m) => m.to === sq)) this._try(this.sel, sq);
-      else if (p && p.color === this.chess.turn()) { this.sel = sq; this.render(); this.el.querySelector(`[data-sq="${sq}"]`).focus(); }
+      else if (p && p.color === this.chess.turn()) { this.sel = sq; this.render(); this.el.querySelector(`[data-sq="${sq}"]`).focus(); this.say(this._selMsg(sq)); }
       else if (this.sel) { this.sel = null; this.render(); this.el.querySelector(`[data-sq="${sq}"]`).focus(); }
     } else if (e.key === 'Escape') { this.sel = null; this.render(); }
   }

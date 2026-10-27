@@ -59,3 +59,12 @@ Some themes have no 1-move puzzles because Lichess never makes them that short (
 - Stockfish.js 19 is GPLv3. Shipping it means distributing this app under GPL-compatible terms. Decide this before any public release.
 - Pieces: Colin M.L. Burnett, CC BY-SA 3.0 (copied from the ChessBotBuddies project's `public/pieces/standard`).
 - chess.js: BSD-2-Clause.
+
+## Before you publish
+
+- Set `FEEDBACK_EMAIL` and/or `FEEDBACK_FORM_URL` in `public/js/config.js`. They drive Send feedback, error reports, and the contact line on the privacy and terms pages. With both empty the app only offers Copy.
+- Error reports: uncaught errors, engine crashes and failed syncs are logged on the device (`blunderprint.errors`, last 20). Nothing is sent unless the user presses send in Settings, Send feedback. No server or third-party service is involved.
+- Daily reminder: a repeating `.ics` calendar event with an alert (`js/reminder.js`). A closed web app cannot push without a server, so the calendar does the nudging.
+- Fonts are self-hosted in `public/fonts` (rebuild with `node scripts/fetch-fonts.mjs`). The app makes no requests to Google.
+- `node scripts/contrast.mjs` checks the colour tokens against WCAG AA in both themes.
+- `privacy.html` and `terms.html` are plain-language drafts. Have them read against your jurisdiction and your hosting setup before launch.

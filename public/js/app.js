@@ -12,6 +12,9 @@ import { pvToSan, reclassify, CLASSIFIER_VERSION } from './classify.js';
 import { Board } from './board.js';
 import { Chess } from '../vendor/chess/chess.js';
 import { esc, plural, fmtDay, fmtRange, addDays, weekStart, DAY } from './util.js';
+import { logError, watchGlobalErrors, buildReport, mailtoLink, getErrors, clearErrors } from './diag.js';
+import { FEEDBACK_EMAIL, FEEDBACK_FORM_URL } from './config.js';
+import { reminderIcs, validTime } from './reminder.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -27,7 +30,11 @@ const ui = {
 /* ------------------------------------------------------------------ engine */
 let engine = null;
 function getEngine() {
-  if (!engine) engine = new Engine(workerTransport('vendor/stockfish/stockfish-19-lite-single.js'));
+  if (!engine) {
+    const e = new Engine(workerTransport('vendor/stockfish/stockfish-19-lite-single.js'));
+    e.onFail = (err) => { logError('engine', err); if (engine === e) engine = null; };
+    engine = e;
+  }
   return engine;
 }
 
@@ -39,8 +46,30 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.add('hide'), 2800);
 }
-function openSheet(html) { $('#sheet').innerHTML = html; $('#scrim').classList.remove('hide'); const f = $('#sheet button, #sheet input, #sheet select'); if (f) f.focus(); }
-function closeSheet() { $('#scrim').classList.add('hide'); $('#sheet').innerHTML = ''; }
+/** Speaks a short message to screen readers without moving focus. */
+let sayTimer;
+function announce(msg) {
+  const el = $('#sr');
+  if (!el || !msg) return;
+  el.textContent = '';
+  clearTimeout(sayTimer);
+  sayTimer = setTimeout(() => { el.textContent = msg; }, 60);
+}
+const setBackdrop = (on) => $$('.app, #tabs').forEach((el) => { el.inert = on; });
+let sheetOpener = null;
+function openSheet(html) {
+  if ($('#scrim').classList.contains('hide')) sheetOpener = document.activeElement;
+  $('#sheet').innerHTML = html;
+  const title = $('#sheet .h2'); if (title) title.id = 'sheetTitle';
+  $('#scrim').classList.remove('hide'); setBackdrop(true);
+  const f = $('#sheet button, #sheet input, #sheet select, #sheet textarea'); if (f) f.focus();
+}
+function closeSheet() {
+  $('#scrim').classList.add('hide'); $('#sheet').innerHTML = ''; setBackdrop(false);
+  if (sheetOpener && document.contains(sheetOpener)) sheetOpener.focus({ preventScroll: true });
+  sheetOpener = null;
+}
+const WCP_LINE = 'Win-chance points: how much a move cut your chance of winning. Dropping from 60% to 50% costs 10 points.';
 const nameOf = (id) => PATTERNS[id].name;
 const setSize = () => state().settings.setSize;
 const sourceLabel = (s) => ({ lichess: 'Lichess', chesscom: 'Chess.com', pgn: 'PGN' }[s] || s);
@@ -120,6 +149,7 @@ function viewOnboard() {
       <p class="eyebrow">Free, no account</p>
       <h1 class="h1">Find the three mistakes costing you the most</h1>
       <p class="sub">Connect the account where you already play. In about a minute you will see the patterns behind your lost points, then drill them for ten minutes a day.</p>
+      <p class="small sub" style="margin-top:8px">${WCP_LINE}</p>
       <div class="steps">
         <div><b>1</b><span><strong>Connect</strong><br><span class="sub small">We read your public games. No password.</span></span></div>
         <div><b>2</b><span><strong>Diagnose</strong><br><span class="sub small">Stockfish runs on this device. Nothing is sent anywhere.</span></span></div>
@@ -132,8 +162,9 @@ function viewOnboard() {
         <label class="fl" for="uname">${o.source === 'pgn' ? 'Your name in the PGN' : 'Your username'}</label>
         <input type="text" id="uname" value="${esc(o.username)}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${o.source === 'pgn' ? 'Name as it appears as White or Black' : 'e.g. your username'}">
         ${o.source === 'pgn' ? `<label class="fl" for="pgn">Games (PGN)</label><textarea id="pgn" placeholder="Paste one or more games">${esc(o.pgn)}</textarea>` : ''}
-        ${o.error ? `<div class="err" role="alert">${esc(o.error)}</div>` : ''}
+        ${o.error ? `<div class="err" role="alert">${esc(o.error)}${o.reportable ? ' <button class="link" data-act="feedback" style="color:inherit;padding:0 4px">Send a report</button>' : ''}</div>` : ''}
         <button class="btn" style="margin-top:14px" data-act="start">Analyse my last ${state().settings.gamesToImport} games</button>
+        <p class="small sub" style="margin-top:10px">Fewer than five games? That still works, but patterns are rough guesses until you have played more. Add games later from Settings and they sharpen.</p>
       </div>
     </section>`;
   }
@@ -156,7 +187,8 @@ function viewOnboard() {
   return `<section class="view welcome">
     <p class="eyebrow">${plural(ps.games, 'game')} analysed</p>
     <h1 class="h1">Your top three patterns</h1>
-    <p class="sub">Ranked by how many win-chance points each one cost you.</p>
+    <p class="sub">Ranked by how many win-chance points each one cost you. ${WCP_LINE.replace('Win-chance points: h', 'H')}</p>
+    ${ps.games < 5 ? `<div class="card" style="margin-top:12px;background:var(--amber-soft);border-color:transparent"><p><b>Only ${plural(ps.games, 'game')} to go on.</b> These patterns are early guesses. Play more, then tap Sync games in Settings and they will sharpen.</p></div>` : ''}
     ${ui.syncing && o.early ? `<div class="card" style="margin-top:12px;background:var(--amber-soft);border-color:transparent"><p><b>Still analysing.</b> ${esc(o.live || '')} These numbers will keep updating.</p></div>` : ''}
     <div class="stack reveal">${ps.list.filter((p) => p.count).slice(0, 3).map((p, i) => patCard(p, max, i + 1, false)).join('') || '<div class="card"><p>No clear mistakes found in these games. Import more games to find patterns.</p></div>'}</div>
     <button class="btn" style="margin-top:18px" data-act="finish-onboard">See today's set</button>
@@ -171,7 +203,7 @@ async function runOnboard() {
   if (o.source === 'pgn' && !o.pgn.trim()) { o.error = 'Paste at least one game.'; render(); return; }
   const s = state();
   s.profile = { source: o.source, username: o.username, createdAt: Date.now() };
-  o.step = 'analyse'; o.error = ''; o.counts = { games: 0, mistakes: 0, drills: 0 }; o.live = 'Fetching your games'; o.progress = 0.02; o.early = false; o.canStart = false;
+  o.step = 'analyse'; o.error = ''; o.reportable = false; o.counts = { games: 0, mistakes: 0, drills: 0 }; o.live = 'Fetching your games'; o.progress = 0.02; o.early = false; o.canStart = false;
   ui.syncing = true;
   render();
   try {
@@ -209,8 +241,10 @@ async function runOnboard() {
     o.step = 'reveal';
   } catch (e) {
     ui.syncing = false;
+    logError('sync', e);
     if (o.early) { setBg(null); toast(e.message || 'Analysis stopped. Pull in more games from Diagnose.'); return; }
-    o.step = 'form'; s.profile = null;
+    logError('sync', e);
+    o.step = 'form'; s.profile = null; o.reportable = true;
     o.error = e.message || 'Something went wrong. Try again.';
   }
   render();
@@ -397,7 +431,7 @@ async function answer(uci, san) {
       const userCp = -ev.cpc;
       drop = Math.max(0, winPct(d.bestCp) - winPct(userCp));
       ok = drop <= 7;
-    } catch { ok = false; drop = 99; }
+    } catch (e) { logError('drill-check', e); ok = false; drop = 99; }
   }
   if (ui.drill !== dr) return;
   dr.ok = ok; dr.exact = exact; dr.drop = drop; dr.phase = 'done';
@@ -411,6 +445,7 @@ async function answer(uci, san) {
   }
   if (navigator.vibrate) try { navigator.vibrate(ok ? 15 : [30, 40, 30]); } catch { /* ignore */ }
   render();
+  setTimeout(() => announce(`${ok ? (exact ? 'Best move.' : 'A good move.') : 'That gives up too much.'} ${d.explain}`), 700);
 }
 
 function rerenderDrillPanel() {
@@ -527,6 +562,7 @@ function pzRefresh() {
   $('#pzTitle').textContent = pzTitle(); $('#pzSub').textContent = pzSub(me);
   $('#pzFb').innerHTML = pzFb(); $('#pzActions').innerHTML = pzActions();
   $('#pzHead').textContent = `Puzzles · ${ui.puzzle.solved} solved of ${ui.puzzle.tried}`;
+  if (ui.puzzle.msg) setTimeout(() => announce(`${ui.puzzle.msgTitle || ''}. ${ui.puzzle.msg}`), 500);
 }
 function mountPuzzle() {
   const pz = ui.puzzle;
@@ -704,11 +740,47 @@ function openSettings() {
     <div class="settings-row"><label for="gamesN"><b>Games per sync</b></label><select id="gamesN" data-set="gamesToImport">${[25, 50, 100].map((n) => `<option value="${n}" ${st.gamesToImport === n ? 'selected' : ''}>Latest ${n}</option>`).join('')}</select></div>
     <div class="settings-row"><label for="eng"><b>Analysis depth</b></label><select id="eng" data-set="engineMs"><option value="40" ${st.engineMs === 40 ? 'selected' : ''}>Fast</option><option value="70" ${st.engineMs === 70 ? 'selected' : ''}>Balanced</option><option value="150" ${st.engineMs === 150 ? 'selected' : ''}>Thorough, slower</option></select><span class="sub small">Applies to games you import from now on.</span></div>
     <div class="settings-row"><label for="theme"><b>Theme</b></label><select id="theme" data-set="theme">${['system', 'light', 'dark'].map((t) => `<option value="${t}" ${st.theme === t ? 'selected' : ''}>${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}</select></div>
+    <div class="settings-row"><label for="remTime"><b>Daily reminder</b></label>
+      <input type="time" id="remTime" data-set="reminderTime" value="${esc(st.reminderTime)}">
+      <span class="sub small">An app that works offline cannot ring a closed phone by itself, so this adds a repeating event with an alert to your calendar. It works on iPhone, Android and desktop.</span>
+      <div class="row" style="gap:8px;margin-top:6px;flex-wrap:wrap;justify-content:flex-start"><button class="btn sm" data-act="rem-ics">Add to calendar</button>${st.reminderTime ? '<button class="btn sm ghost" data-act="rem-off">Turn off</button>' : ''}</div>
+      ${st.reminderTime ? `<span class="sub small">Reminder time saved: ${esc(st.reminderTime)}. To stop the alerts, also delete the event in your calendar.</span>` : ''}</div>
+    <div class="settings-row"><b>Feedback and problems</b><span class="sub small">${getErrors().length ? `${plural(getErrors().length, 'problem')} recorded on this device. ` : ''}Tell us what is broken or missing. You see exactly what is sent before it goes.</span>
+      <div class="row" style="gap:8px;margin-top:6px;justify-content:flex-start"><button class="btn sm ghost" data-act="feedback">Send feedback</button></div></div>
     <div class="settings-row"><b>Your data</b><span class="sub small">Stored only in this browser. Back it up before clearing site data.</span>
       <div class="row" style="gap:8px;margin-top:6px;flex-wrap:wrap"><button class="btn sm ghost" data-act="export">Download backup</button><label class="btn sm ghost" style="cursor:pointer">Restore backup<input type="file" id="restore" accept="application/json" class="hide"></label></div></div>
     <div class="settings-row"><b>Reset everything</b><span class="sub small">Deletes games, drills and history from this device.</span><button class="btn sm danger" style="margin-top:6px;width:fit-content" data-act="reset">Delete all data</button></div>
-    <p class="sub small" style="margin-top:12px">Engine: Stockfish 19 (GPLv3), running locally. Pieces: Colin M.L. Burnett (CC BY-SA 3.0).</p>
+    <p class="sub small" style="margin-top:12px">Engine: Stockfish 19 (GPLv3), running locally. Pieces: Colin M.L. Burnett (CC BY-SA 3.0). <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a></p>
     <button class="btn" style="margin-top:12px" data-act="close">Done</button>`);
+}
+
+function openFeedback(prefill = '') {
+  const crashed = getErrors().length;
+  openSheet(`<h2 class="h2">Send feedback</h2>
+    <p class="sub small" style="margin:6px 0 10px">What happened, or what would you like? One or two lines is plenty.</p>
+    <label class="fl" for="fbNote">Your message</label>
+    <textarea id="fbNote" style="font-family:var(--f-body);font-size:1rem" placeholder="e.g. The board froze on my third drill">${esc(prefill)}</textarea>
+    <label class="check"><input type="checkbox" id="fbDetails" checked> Include technical details${crashed ? ` (${plural(crashed, 'recent error')})` : ''}</label>
+    <details class="eng"><summary>What would be sent</summary><pre id="fbPreview" class="mono" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
+    <p class="small sub">Details are the app version, browser and recent errors. They never include your username, games or positions.</p>
+    <div class="stack" style="margin-top:12px">
+      ${FEEDBACK_EMAIL ? '<button class="btn" data-act="fb-mail">Send by email</button>' : ''}
+      ${FEEDBACK_FORM_URL ? '<a class="btn ghost" href="' + esc(FEEDBACK_FORM_URL) + '" target="_blank" rel="noopener">Open the feedback form</a>' : ''}
+      <button class="btn ${FEEDBACK_EMAIL || FEEDBACK_FORM_URL ? 'ghost' : ''}" data-act="fb-copy">Copy to clipboard</button>
+      <button class="btn ghost" data-act="close">Cancel</button>
+    </div>`);
+  updateFeedbackPreview();
+}
+const feedbackText = () => buildReport($('#fbNote')?.value || '', { includeDetails: $('#fbDetails')?.checked !== false, gameCount: Object.keys(state().games).length });
+function updateFeedbackPreview() { const p = $('#fbPreview'); if (p) p.textContent = feedbackText() || '(nothing yet)'; }
+
+function downloadReminder() {
+  const t = state().settings.reminderTime;
+  if (!validTime(t)) { toast('Pick a time first.'); return; }
+  const b = new Blob([reminderIcs(t, { url: location.origin + location.pathname })], { type: 'text/calendar' });
+  const l = document.createElement('a'); l.href = URL.createObjectURL(b); l.download = 'blunderprint-reminder.ics'; l.click();
+  setTimeout(() => URL.revokeObjectURL(l.href), 4000);
+  toast('Open the file to add it to your calendar.');
 }
 
 function applyTheme() {
@@ -723,7 +795,7 @@ async function manualSync(count) {
   try {
     const r = await sync({ count: count || s.settings.gamesToImport, pgn: '', onStatus: (st) => { if (st.phase === 'analyse') { const b = $('[data-act="sync"]'); if (b) b.textContent = `Analysing game ${st.game} of ${st.games}`; } } });
     toast(r.analysed ? `${plural(r.analysed, 'new game')} analysed, ${plural(r.drills, 'new drill')}.` : 'No new games found.');
-  } catch (e) { toast(e.message || 'Sync failed.'); }
+  } catch (e) { logError('sync', e); toast(e.message || 'Sync failed.'); }
   ui.syncing = false; render();
 }
 
@@ -767,14 +839,17 @@ function reviewGraph(g, rv) {
       ${dots}<line x1="${X(rv.p)}" x2="${X(rv.p)}" y1="0" y2="${H}" stroke="var(--amber)" stroke-width="2"/></svg></section>`;
 }
 
+function reviewLabel(rv) {
+  if (rv.mode === 'moments') return `Mistake ${rv.p + 1} of ${rv.keys.length}`;
+  if (rv.p === 0) return 'Start of the game';
+  return `${moveNo(rv.p - 1)}${(rv.p - 1) % 2 === 0 ? '.' : '...'} ${rv.moves[rv.p - 1]?.san || ''}`;
+}
+
 function viewReview() {
   const s = state(), rv = ui.review, g = s.games[rv.id];
   const km = rvKey(rv);
   const result = g.result === 'win' ? 'Won' : g.result === 'loss' ? 'Lost' : 'Drew';
-  let label;
-  if (rv.mode === 'moments') label = `Mistake ${rv.p + 1} of ${rv.keys.length}`;
-  else if (rv.p === 0) label = 'Start of the game';
-  else label = `${moveNo(rv.p - 1)}${(rv.p - 1) % 2 === 0 ? '.' : '...'} ${rv.moves[rv.p - 1]?.san || ''}`;
+  const label = reviewLabel(rv);
   const chips = rv.keys.length
     ? `<div class="chips" role="group" aria-label="Key mistakes" style="margin-top:12px">${rv.keys.map((m, i) => `<button data-act="rv-km" data-v="${i}" aria-pressed="${km === m}">Move ${moveNo(m.ply)} \u00b7 \u2212${Math.round(m.wpLoss)}%</button>`).join('')}</div>`
     : '<div class="card" style="margin-top:12px"><p><b>No big mistakes.</b> Nothing in this game lost more than 12 points of win chance.</p></div>';
@@ -818,6 +893,7 @@ function mountReview() {
     const m = rv.moves[rv.p - 1];
     ui.board.mark(m.from, 'last'); ui.board.mark(m.to, 'last');
   }
+  announce(`${reviewLabel(rv)}.${km ? ` Mistake, lost ${Math.round(km.wpLoss)} percent win chance. You played ${km.playedSan}, best was ${km.bestSan}. ${km.explain}` : ''}`);
 }
 
 function reviewStep(delta) {
@@ -839,7 +915,7 @@ async function backfillMoves() {
     const id = ui.review && ui.review.id;
     if (id && s.games[id].sans) openReview(id);
     else toast('That game is older than your latest 100, so its moves cannot be loaded.');
-  } catch (e) { toast(e.message || 'Could not load the moves.'); }
+  } catch (e) { logError('backfill', e); toast(e.message || 'Could not load the moves.'); }
 }
 
 /* ------------------------------------------------------------------ router + render */
@@ -847,10 +923,30 @@ function nav(tab) {
   ui.tab = tab;
   if (tab !== 'diagnose') ui.review = null;
   if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab);
+  ui.focusHeading = true;
   render(); window.scrollTo(0, 0);
 }
 
+/** Re-draws the screen, then puts keyboard and screen-reader focus back where the user was. */
 function render() {
+  const cur = document.activeElement;
+  const had = cur && cur !== view && view.contains(cur);
+  let key = null;
+  if (had) {
+    const d = cur.dataset || {};
+    if (d.sq) key = `[data-sq="${d.sq}"]`;
+    else if (cur.id) key = '#' + cur.id;
+    else if (d.act) key = `[data-act="${d.act}"]${d.v != null ? `[data-v="${CSS.escape(d.v)}"]` : ''}${d.id ? `[data-id="${CSS.escape(d.id)}"]` : ''}${d.p != null ? `[data-p="${CSS.escape(d.p)}"]` : ''}`;
+  }
+  renderView();
+  if (ui.focusHeading) { ui.focusHeading = false; focusHeading(); return; }
+  if (!had) return;
+  const n = key && view.querySelector(key);
+  if (n) n.focus({ preventScroll: true }); else focusHeading();
+}
+function focusHeading() { const h = view.querySelector('h1') || view; h.tabIndex = -1; h.focus({ preventScroll: true }); }
+
+function renderView() {
   const s = state();
   const needsOnboard = !s.profile || ui.onboard.step === 'analyse' || ui.onboard.step === 'reveal';
   applyTheme();
@@ -982,16 +1078,31 @@ document.addEventListener('click', async (e) => {
     case 'reset-yes': reset(); closeSheet(); ui.session = null; ui.drill = null; ui.onboard.step = 'form'; render(); break;
     case 'install': if (installEvent) { installEvent.prompt(); await installEvent.userChoice.catch(() => {}); installEvent = null; closeSheet(); } break;
     case 'close': closeSheet(); break;
+    case 'feedback': openFeedback(); break;
+    case 'fb-mail': location.href = mailtoLink('Blunderprint feedback', feedbackText()); break;
+    case 'fb-copy': { const txt = feedbackText(); try { await navigator.clipboard.writeText(txt); toast('Copied. Paste it into a message to us.'); } catch { const ta = $('#fbPreview'); if (ta) { $('#sheet details').open = true; toast('Select the text and copy it.'); } } break; }
+    case 'rem-ics': downloadReminder(); break;
+    case 'rem-off': state().settings.reminderTime = ''; save(); openSettings(); toast('Reminder cleared.'); break;
   }
 });
 document.addEventListener('change', (e) => {
   const t = e.target;
-  if (t.dataset && t.dataset.set) { const k = t.dataset.set; state().settings[k] = k === 'theme' ? t.value : +t.value; if (k === 'setSize') state().today = null; save(); applyTheme(); }
+  if (t.dataset && t.dataset.set) { const k = t.dataset.set; state().settings[k] = k === 'theme' || k === 'reminderTime' ? t.value : +t.value; if (k === 'setSize') state().today = null; save(); applyTheme(); }
   if (t.id === 'restore' && t.files[0]) {
     t.files[0].text().then((txt) => { try { importJson(txt); closeSheet(); ui.session = null; ui.drill = null; render(); toast('Backup restored'); } catch (err) { toast(err.message); } });
   }
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#scrim').classList.contains('hide')) closeSheet(); });
+document.addEventListener('keydown', (e) => { // keep Tab inside an open sheet
+  if (e.key !== 'Tab' || $('#scrim').classList.contains('hide')) return;
+  const f = $$('#sheet button, #sheet input, #sheet select, #sheet textarea, #sheet summary, #sheet a[href]').filter((x) => !x.disabled && x.offsetParent !== null);
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+});
+document.addEventListener('input', (e) => { if (e.target.id === 'fbNote') updateFeedbackPreview(); });
+document.addEventListener('change', (e) => { if (e.target.id === 'fbDetails') updateFeedbackPreview(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches && e.target.matches('[role=button][data-act]')) e.target.click(); });
 $('#settingsBtn').addEventListener('click', openSettings);
 $('#streakChip').addEventListener('click', () => nav('today'));
@@ -1020,6 +1131,7 @@ function migrate() {
   save();
 }
 migrate();
+watchGlobalErrors(() => toast('Something went wrong. Open Settings, then Send feedback, to report it.'));
 const h = location.hash.slice(1);
 if (['today', 'diagnose', 'retry', 'report'].includes(h)) ui.tab = h;
 render();

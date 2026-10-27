@@ -5,6 +5,8 @@ import { classify, pvToSan, nonPawnMaterial, materialGain, reclassify } from '..
 import { gradeDrill, streak, INTERVALS, buildToday, addDrillsFromGame, extraDrills, puzzleStats } from '../public/js/srs.js';
 import { parsePgn } from '../public/js/importer.js';
 import { dayKey, addDays } from '../public/js/util.js';
+import { reminderIcs, validTime } from '../public/js/reminder.js';
+import { Engine } from '../public/js/engine.js';
 
 const t = (name, fn) => { fn(); console.log('ok  ', name); };
 const blank = () => ({ games: {}, drills: {}, attempts: [], today: null, settings: { setSize: 5 } });

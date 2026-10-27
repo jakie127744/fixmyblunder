@@ -8,7 +8,7 @@ Blunderprint bundles the following. Keep this file and the licence texts alongsi
 | chess.js 1.4.0 (Jeff Hlywa) | `public/vendor/chess/chess.js` | BSD 2-Clause | Keep the copyright notice and disclaimer (it is in the file header). |
 | Chess piece images (Colin M. L. Burnett, "Cburnett" set from Wikimedia Commons) | `public/img/pieces/` | CC BY-SA 3.0 (also offered under GPL, GFDL and BSD by the author; check the Commons page for the exact terms) | Credit the author and link the licence. Changes to the images must be shared under the same licence. |
 | Lichess open puzzle database | `public/data/puzzles/` | CC0 (public domain) | None. Credit is appreciated: https://database.lichess.org |
-| Bricolage Grotesque, Figtree, JetBrains Mono | loaded from Google Fonts | SIL Open Font License 1.1 | None for loading them from Google. Loading them sends visitors' IP addresses to Google. |
+| Bricolage Grotesque, Figtree, JetBrains Mono | `public/fonts/` (Latin subsets, self-hosted; `scripts/fetch-fonts.mjs` rebuilds them) | SIL Open Font License 1.1 | Keep the licence with the fonts. The app makes no requests to Google. |
 
 ## Online services the app calls
 

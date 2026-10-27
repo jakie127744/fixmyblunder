@@ -14,24 +14,25 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="icon" href="img/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="img/icon-192.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="preload" href="fonts/figtree-400-1.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/fonts.css">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
+<a class="skip" href="#view">Skip to content</a>
 <div class="app">
   <header class="top">
     <div class="brand"><span class="logo" aria-hidden="true"></span>Blunderprint</div>
     <div class="row" style="gap:4px">
-      <button class="chip" id="streakChip" hidden aria-label="Streak"></button>
+      <button class="chip" id="streakChip" hidden></button>
       <button class="iconbtn" id="settingsBtn" aria-label="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
     </div>
   </header>
   <div id="offline" class="offline" hidden>You are offline. Drills and reports still work. Importing needs a connection.</div>
   <div id="bgbar" class="bgbar" hidden role="status"><span></span><div class="bar"><i></i></div></div>
-  <main id="view" aria-live="polite"></main>
-  <p class="note">Your games and progress stay on this device.</p>
+  <main id="view" tabindex="-1"></main>
+  <div id="sr" class="sr" role="status" aria-live="polite" aria-atomic="true"></div>
+  <p class="note">Your games and progress stay on this device.<br><a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <button class="link inline" data-act="feedback" type="button">Send feedback</button></p>
 </div>
 
 <div class="tabs" id="tabs" hidden><nav aria-label="Main">
@@ -41,7 +42,7 @@
   <button data-tab="report"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Report</button>
 </nav></div>
 
-<div class="scrim hide" id="scrim"><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
+<div class="scrim hide" id="scrim"><div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle"></div></div>
 <div class="toast hide" id="toast" role="status"></div>
 <script type="module" src="js/app.js"></script>
 </body>

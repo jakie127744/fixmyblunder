@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#2a6a46">
+<title>Privacy · Blunderprint</title>
+<link rel="icon" href="img/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<main class="legal">
+  <a class="back" href="./">‹ Back to Blunderprint</a>
+  <p class="eyebrow">Last updated 27 October 2026</p>
+  <h1 class="h1">Privacy</h1>
+  <p>Blunderprint has no accounts and no analytics. We do not run a server that receives your chess games, and we cannot see what you do in the app. This page says what does leave your device, and when.</p>
+
+  <h2>The analysis stays on your device</h2>
+  <p>The engine that checks your moves (Stockfish) runs inside your browser. Your games, the mistakes found in them, your drills, streak and settings are saved in your browser's local storage on this device. They are never uploaded to us.</p>
+
+  <h2>Where your games come from</h2>
+  <p>The app reads public games only. When you connect Lichess or Chess.com, your browser asks that site directly for the games of the username you typed. No password or login is involved. Those sites receive your IP address and the username, and handle them under their own privacy policies:</p>
+  <ul>
+    <li><a href="https://lichess.org/privacy" rel="noopener">Lichess privacy policy</a></li>
+    <li><a href="https://www.chess.com/legal/privacy" rel="noopener">Chess.com privacy policy</a></li>
+  </ul>
+  <p>If you paste a PGN instead, nothing is requested from anyone.</p>
+
+  <h2>Fonts</h2>
+  <p>The fonts are served from this site. The app does not load anything from Google or any other font service, so your IP address is not shared with them.</p>
+
+  <h2>Feedback and error reports</h2>
+  <p>If something breaks, the app keeps a short log of recent errors on your device. It includes the error message, the app version and your browser type. It never includes your username, your games or positions. The log is only sent if you choose Send feedback and press send, and you can read the text first. It then reaches us by email or form, and we use it only to fix the problem and reply to you.</p>
+
+  <h2>Reminders</h2>
+  <p>The daily reminder is a calendar file created on your device and opened in your own calendar app. We never see the time you choose.</p>
+
+  <h2>Cookies and tracking</h2>
+  <p>None. The app sets no cookies and has no advertising or tracking scripts. It uses your browser's local storage and a service worker cache so it can work offline.</p>
+
+  <h2>The web host</h2>
+  <p>Whoever hosts this site can see the usual server logs for any website: your IP address, the time and the files requested. They do not include anything you do inside the app.</p>
+
+  <h2>Your choices</h2>
+  <ul>
+    <li><strong>Back up:</strong> Settings, Download backup gives you a file you control.</li>
+    <li><strong>Delete:</strong> Settings, Delete all data erases everything the app stores. Clearing the site's data in your browser does the same.</li>
+  </ul>
+
+  <h2>Changes and contact</h2>
+  <p>If this page changes in a way that matters, the date above changes too. Questions: <a id="contact" href="terms.html">see the contact details on the Terms page</a>.</p>
+</main>
+<script type="module">
+  import { FEEDBACK_EMAIL, FEEDBACK_FORM_URL } from './js/config.js';
+  const a = document.getElementById('contact');
+  if (FEEDBACK_EMAIL) { a.href = 'mailto:' + FEEDBACK_EMAIL; a.textContent = FEEDBACK_EMAIL; }
+  else if (FEEDBACK_FORM_URL) { a.href = FEEDBACK_FORM_URL; a.textContent = 'use the feedback form'; }
+</script>
+</body>
+</html>

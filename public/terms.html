@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#2a6a46">
+<title>Terms · Blunderprint</title>
+<link rel="icon" href="img/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<main class="legal">
+  <a class="back" href="./">‹ Back to Blunderprint</a>
+  <p class="eyebrow">Last updated 27 October 2026</p>
+  <h1 class="h1">Terms of use</h1>
+  <p>By using Blunderprint you agree to these terms. They are short on purpose.</p>
+
+  <h2>What the app is</h2>
+  <p>Blunderprint is a free training tool. It reads public games from Lichess and Chess.com, or a PGN you paste, finds mistakes you repeat, and gives you drills for them. It is not affiliated with or endorsed by Lichess, Chess.com or the Stockfish project.</p>
+
+  <h2>Using it</h2>
+  <ul>
+    <li>Use it for your own training. You are responsible for the username you enter and for following the rules of the sites you import from, including their limits on how often you request games.</li>
+    <li>Do not try to break the app, overload the sites it talks to, or use it to harass anyone.</li>
+  </ul>
+
+  <h2>The analysis can be wrong</h2>
+  <p>The engine runs briefly on a phone, so its judgments are quick and shallow by design. Pattern names are rules of thumb, not proof. Treat results as suggestions for practice, not as a rating or a guarantee that you will improve.</p>
+
+  <h2>Your data</h2>
+  <p>Your games and progress are stored on your device. If you clear your browser data or lose the device, they are gone unless you made a backup. Keeping backups is your job. See the <a href="privacy.html">Privacy page</a> for exactly what leaves your device.</p>
+
+  <h2>No warranty, limited liability</h2>
+  <p>The app is provided as it is, without promises that it will always work or be free of mistakes. To the extent the law allows, we are not liable for losses that come from using it, including lost data. Nothing here limits rights you have by law that cannot be limited.</p>
+
+  <h2>Open-source parts</h2>
+  <ul>
+    <li>Stockfish.js 19, the chess engine, is licensed under the GNU GPL v3.</li>
+    <li>Chess pieces by Colin M.L. Burnett, CC BY-SA 3.0.</li>
+    <li>Fonts Bricolage Grotesque, Figtree and JetBrains Mono, SIL Open Font License 1.1.</li>
+    <li>chess.js, BSD 2-Clause licence.</li>
+  </ul>
+
+  <h2>Changes and contact</h2>
+  <p>We may update these terms; the date above will change. If you keep using the app after a change, you accept the new terms. Questions: <a id="contact" href="privacy.html">see the Privacy page</a>.</p>
+</main>
+<script type="module">
+  import { FEEDBACK_EMAIL, FEEDBACK_FORM_URL } from './js/config.js';
+  const a = document.getElementById('contact');
+  if (FEEDBACK_EMAIL) { a.href = 'mailto:' + FEEDBACK_EMAIL; a.textContent = FEEDBACK_EMAIL; }
+  else if (FEEDBACK_FORM_URL) { a.href = FEEDBACK_FORM_URL; a.textContent = 'use the feedback form'; }
+</script>
+</body>
+</html>
