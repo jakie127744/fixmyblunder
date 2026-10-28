@@ -34,6 +34,7 @@ a{color:var(--accent)}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:calc(12px + env(safe-area-inset-top,0px)) 0 6px}
 .brand{font-family:var(--f-display);font-weight:700;font-size:1.1875rem;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
 .logo{width:24px;height:24px;border-radius:7px;background:conic-gradient(var(--sq-d) 25%,var(--sq-l) 0 50%,var(--sq-d) 0 75%,var(--sq-l) 0) 0 0/12px 12px;box-shadow:inset 0 0 0 1.5px var(--ink)}
+.wordmark{height:30px;width:auto;display:block;border-radius:6px}
 .iconbtn{width:44px;height:44px;border-radius:12px;border:0;background:transparent;display:grid;place-items:center;color:var(--ink-2)}
 .iconbtn svg,.tabs svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 .view{animation:in .22s ease}
