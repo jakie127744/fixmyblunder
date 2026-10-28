@@ -466,6 +466,7 @@ function applyThink(owner) {
   };
   draw(); thinkTimer = setInterval(draw, 250);
 }
+const THINK_OPTS = [[0, 'Off'], [5, '5 sec'], [15, '15 sec'], [30, '30 sec'], [60, '1 min']];
 const thinkBox = '<div id="think" class="think" role="status" hidden></div>';
 
 function mountDrill() {
@@ -550,6 +551,7 @@ function viewHub() {
   const onPuzzleTab = ui.tab === 'puzzles';
   const games = pr.mode === 'games' && !onPuzzleTab;
   const modeBar = onPuzzleTab ? '' : `<div class="mode" role="tablist" aria-label="Practice source"><button role="tab" data-act="mode" data-v="games" aria-selected="${games}">My games</button><button role="tab" data-act="mode" data-v="puzzles" aria-selected="${!games}">Puzzles</button></div>`;
+  const thinkPick = `<p class="group-title" style="margin-top:16px">Think first</p><p class="sub small" style="margin:0 0 8px">Board stays locked until this time is up, so you look before you move.</p><div class="chips" role="group" aria-label="Think first">${THINK_OPTS.map(([n, l]) => `<button data-act="think" data-v="${n}" aria-pressed="${(s.settings.thinkSecs || 0) === n}">${l}</button>`).join('')}</div>`;
   const chip = (act, v, label, on, off) => `<button data-act="${act}" data-v="${v}" aria-pressed="${on}" ${off ? 'disabled' : ''}>${label}</button>`;
   if (games) {
     const t = buildToday(s), res = todayResults(s);
@@ -566,6 +568,7 @@ function viewHub() {
           <div class="chips" role="group" aria-label="Mistake type">${chip('pp', 'all', `All types · ${total}`, pr.pattern === 'all', !total)}${PATTERN_ORDER.map((p) => chip('pp', p, `${esc(nameOf(p))} · ${counts[p]}`, pr.pattern === p, !counts[p])).join('')}</div>
           <p class="group-title" style="margin-top:16px">How many</p>
           <div class="chips" role="group" aria-label="How many drills">${[5, 10, 20].map((k) => chip('pn', k, k, pr.n === k, false)).join('')}</div>
+          ${thinkPick}
           ${total === 0 ? '<p class="sub small" style="margin-top:8px">Import more games on the Diagnose tab to find more mistakes.</p>' : ''}
         </section>
       </div>
@@ -583,6 +586,7 @@ function viewHub() {
         <div class="chips" role="group" aria-label="Moves in the solution">${MOVE_COUNTS.map(([id, name]) => chip('pm', id, name, String(pr.moves) === String(id), false)).join('')}</div>
         <p class="group-title">Difficulty</p>
         <div class="chips" role="group" aria-label="Difficulty">${DIFFICULTY.map(([id, name]) => chip('pd', id, name, pr.difficulty === id, false)).join('')}</div>
+        ${thinkPick}
         ${Object.keys(s.drills).length ? '<button class="link" data-act="pmatch" style="margin-top:8px">Pick a theme for my top mistake type</button>' : ''}
       </section>
     </div>
@@ -856,7 +860,7 @@ function openSettings() {
       <div class="row" style="gap:8px;margin-top:6px"><button class="btn sm" data-act="sync-from-settings">Sync games</button><button class="btn sm ghost" data-act="switch">Change account</button></div></div>` : ''}
     ${installRow()}
     <div class="settings-row"><label for="setSize"><b>Drills per day</b></label><select id="setSize" data-set="setSize">${[3, 5, 8, 10, 15].map((n) => `<option value="${n}" ${st.setSize === n ? 'selected' : ''}>${n} drills, about ${Math.round(n * 1.5)} min</option>`).join('')}</select></div>
-    <div class="settings-row"><label for="thinkSecs"><b>Think first</b></label><select id="thinkSecs" data-set="thinkSecs">${[[0, 'Off'], [5, '5 seconds'], [10, '10 seconds'], [15, '15 seconds'], [30, '30 seconds'], [60, '1 minute']].map(([n, l]) => `<option value="${n}" ${(st.thinkSecs || 0) === n ? 'selected' : ''}>${l}</option>`).join('')}</select><span class="sub small">Locks the board in drills and puzzles until the time is up, so you look before you move. Many blunders come from moving too fast.</span></div>
+    <div class="settings-row"><label for="thinkSecs"><b>Think first</b></label><select id="thinkSecs" data-set="thinkSecs">${[[0, 'Off'], [5, '5 seconds'], [15, '15 seconds'], [30, '30 seconds'], [60, '1 minute']].map(([n, l]) => `<option value="${n}" ${(st.thinkSecs || 0) === n ? 'selected' : ''}>${l}</option>`).join('')}</select><span class="sub small">Locks the board in drills and puzzles until the time is up, so you look before you move. Many blunders come from moving too fast.</span></div>
     <div class="settings-row"><label for="gamesN"><b>Games per sync</b></label><select id="gamesN" data-set="gamesToImport">${[25, 50, 100].map((n) => `<option value="${n}" ${st.gamesToImport === n ? 'selected' : ''}>Latest ${n}</option>`).join('')}</select></div>
     <div class="settings-row"><label for="eng"><b>Analysis depth</b></label><select id="eng" data-set="engineMs"><option value="40" ${st.engineMs === 40 ? 'selected' : ''}>Fast</option><option value="70" ${st.engineMs === 70 ? 'selected' : ''}>Balanced</option><option value="150" ${st.engineMs === 150 ? 'selected' : ''}>Thorough, slower</option></select><span class="sub small">Applies to games you import from now on.</span></div>
     <div class="settings-row"><label for="theme"><b>Theme</b></label><select id="theme" data-set="theme">${['system', 'light', 'dark'].map((t) => `<option value="${t}" ${st.theme === t ? 'selected' : ''}>${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}</select></div>
@@ -1257,6 +1261,7 @@ document.addEventListener('click', async (e) => {
     case 'again': { const d = currentDrill(); ui.drill = { ...ui.drill, phase: 'ask', hint: ui.drill.hint, hintSq: false, playedUci: null, start: Date.now(), thinkAt: Date.now(), lesson: null, shown: '', idx: 0 }; ui.board.setPosition(d.fen, d.side); ui.board.setEnabled(true); render(); break; }
     case 'answer': { const d = currentDrill(); ui.drill.shown = 'best'; ui.drill.idx = 0; if (ui.drill.lesson) { refreshLesson(); break; } ui.board.setPosition(d.fen, d.side); const m = ui.board.play(d.bestUci); ui.board.mark(d.bestUci.slice(2, 4), 'good'); ui.board.setEnabled(false); toast(`The answer was ${m.san}`); break; }
     case 'next': nextDrill(); break;
+    case 'think': state().settings.thinkSecs = +v; save(); render(); break;
     case 'rep': ui.report = v; render(); break;
     case 'pz-period': ui.pzPeriod = v; render(); break;
     case 'pz-sort': ui.pzSort = v; render(); break;

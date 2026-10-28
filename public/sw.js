@@ -1,6 +1,6 @@
 // Offline shell. App files are network-first (so updates arrive), the engine, pieces and chess.js are cache-first.
 // Game APIs (lichess.org, api.chess.com) always go to the network.
-const VERSION = 'bp-v13';
+const VERSION = 'bp-v14';
 const PUZZLES = 'bp-puzzles'; // kept across app updates so the puzzle download is not repeated
 const STATIC = [
   'vendor/chess/chess.js', 'vendor/stockfish/stockfish-19-lite-single.js', 'vendor/stockfish/stockfish-19-lite-single.wasm',
