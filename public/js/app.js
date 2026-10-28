@@ -410,6 +410,7 @@ function viewRetry() {
     <div class="prog" aria-hidden="true">${se.ids.map((id, i) => `<i class="${se.results[id] ? (se.results[id].ok ? 'on' : 'miss') : i === se.idx ? 'cur' : ''}"></i>`).join('')}</div>
     <h1 class="h1" style="margin-top:12px">${dr.phase === 'ask' ? 'Find the better move' : dr.ok ? 'Good find' : 'Not quite'}</h1>
     <p class="sub">${dr.phase === 'ask' ? `You are ${me}. In your game this position cost you ${Math.round(d.wpLoss)}% win chance.` : ''}</p>
+    ${thinkBox}
     <div class="board-wrap"><div id="board"></div></div>
     <div id="fb">${fbHtml()}</div>
     <div class="stack" style="margin-top:12px">${actionsHtml()}</div>
@@ -447,15 +448,36 @@ function actionsHtml() {
   return h;
 }
 
+/** Think-first mode: keeps the board locked until the chosen number of seconds has passed since the position appeared. */
+let thinkTimer = null;
+function applyThink(owner) {
+  clearInterval(thinkTimer); thinkTimer = null;
+  const el = $('#think'), secs = state().settings.thinkSecs || 0;
+  if (!el) return;
+  const left = () => (owner.thinkAt + secs * 1000 - Date.now()) / 1000;
+  if (!secs || !owner.thinkAt || owner.phase !== 'ask' || left() <= 0) { el.hidden = true; return; }
+  ui.board.setEnabled(false);
+  const draw = () => {
+    const l = left();
+    if ((ui.drill !== owner && ui.puzzle !== owner) || !ui.board || !$('#think')) { clearInterval(thinkTimer); return; }
+    if (l <= 0) { clearInterval(thinkTimer); el.hidden = true; if (owner.phase === 'ask') ui.board.setEnabled(true); announce('Your move'); return; }
+    el.hidden = false;
+    el.innerHTML = `<span>Think first. Look for checks, captures and threats. You can move in <b>${Math.ceil(l)}s</b>.</span><span class="tbar"><i style="width:${Math.round((1 - l / secs) * 100)}%"></i></span>`;
+  };
+  draw(); thinkTimer = setInterval(draw, 250);
+}
+const thinkBox = '<div id="think" class="think" role="status" hidden></div>';
+
 function mountDrill() {
   const d = currentDrill();
   if (!d) return;
-  if (!ui.drill || ui.drill.id !== d.id) ui.drill = { id: d.id, phase: 'ask', start: Date.now(), hint: '', hintSq: false, graded: false };
+  if (!ui.drill || ui.drill.id !== d.id) ui.drill = { id: d.id, phase: 'ask', start: Date.now(), thinkAt: Date.now(), hint: '', hintSq: false, graded: false };
   const el = $('#board');
   if (!el) return;
   ui.board = new Board(el, { fen: d.fen, orientation: d.side, canMove: ui.drill.phase === 'ask', onMove: answer });
   // re-apply state after a rerender mid-drill
   const dr = ui.drill;
+  applyThink(dr);
   if (dr.phase !== 'ask' && dr.playedUci) { ui.board.play(dr.playedUci); ui.board.mark(dr.playedUci.slice(2, 4), dr.ok ? 'good' : 'bad'); }
   if (dr.phase === 'done' && dr.lesson && dr.shown) lpApply();
   if (dr.hintSq) ui.board.mark(d.bestUci.slice(0, 2), 'hint');
@@ -598,7 +620,7 @@ async function loadPuzzle() {
     pz.p = await nextPuzzle(pz.theme, { moves: pz.moves, difficulty: pz.difficulty }, pz.seen);
     pz.seen.add(pz.p.id);
     const sv = state(); sv.puzzleSeen = [...pz.seen].slice(-4000); save();
-    pz.step = 0; pz.phase = 'ask'; pz.failed = false; pz.hint = false; pz.start = Date.now(); pz.msg = ''; pz.msgKind = '';
+    pz.step = 0; pz.phase = 'ask'; pz.failed = false; pz.hint = false; pz.start = Date.now(); pz.thinkAt = Date.now(); pz.msg = ''; pz.msgKind = '';
     if (pz.p.wrapped) { pz.msgTitle = 'You have seen them all'; pz.msg = `Every one of the ${pz.p.pool} matching puzzles is done. Starting over.`; pz.msgKind = 'hint'; }
   } catch (e) { pz.phase = 'error'; pz.error = e.message || 'Could not load a puzzle.'; }
   render();
@@ -614,6 +636,7 @@ function viewPuzzle() {
     <div class="row"><span class="tag">${esc(themeName(pz.theme))}</span><span class="tag">${plural(p.moves, 'move')}</span><span class="tag">Rating ${p.rating}</span></div>
     <h1 class="h1" style="margin-top:10px" id="pzTitle">${pzTitle()}</h1>
     <p class="sub" id="pzSub">${pzSub(me)}</p>
+    ${thinkBox}
     <div class="board-wrap"><div id="board"></div></div>
     <div id="pzFb">${pzFb()}</div>
     <div class="stack" style="margin-top:12px" id="pzActions">${pzActions()}</div></section>`;
@@ -642,6 +665,7 @@ function mountPuzzle() {
   const pz = ui.puzzle;
   if (!pz || !pz.p || !$('#board')) return;
   ui.board = new Board($('#board'), { fen: pz.p.fen, orientation: pz.p.side, canMove: pz.phase === 'ask', onMove: puzzleMove });
+  applyThink(pz);
 }
 function logPuzzle(ok) {
   const pz = ui.puzzle, s = state();
@@ -832,6 +856,7 @@ function openSettings() {
       <div class="row" style="gap:8px;margin-top:6px"><button class="btn sm" data-act="sync-from-settings">Sync games</button><button class="btn sm ghost" data-act="switch">Change account</button></div></div>` : ''}
     ${installRow()}
     <div class="settings-row"><label for="setSize"><b>Drills per day</b></label><select id="setSize" data-set="setSize">${[3, 5, 8, 10, 15].map((n) => `<option value="${n}" ${st.setSize === n ? 'selected' : ''}>${n} drills, about ${Math.round(n * 1.5)} min</option>`).join('')}</select></div>
+    <div class="settings-row"><label for="thinkSecs"><b>Think first</b></label><select id="thinkSecs" data-set="thinkSecs">${[[0, 'Off'], [5, '5 seconds'], [10, '10 seconds'], [15, '15 seconds'], [30, '30 seconds'], [60, '1 minute']].map(([n, l]) => `<option value="${n}" ${(st.thinkSecs || 0) === n ? 'selected' : ''}>${l}</option>`).join('')}</select><span class="sub small">Locks the board in drills and puzzles until the time is up, so you look before you move. Many blunders come from moving too fast.</span></div>
     <div class="settings-row"><label for="gamesN"><b>Games per sync</b></label><select id="gamesN" data-set="gamesToImport">${[25, 50, 100].map((n) => `<option value="${n}" ${st.gamesToImport === n ? 'selected' : ''}>Latest ${n}</option>`).join('')}</select></div>
     <div class="settings-row"><label for="eng"><b>Analysis depth</b></label><select id="eng" data-set="engineMs"><option value="40" ${st.engineMs === 40 ? 'selected' : ''}>Fast</option><option value="70" ${st.engineMs === 70 ? 'selected' : ''}>Balanced</option><option value="150" ${st.engineMs === 150 ? 'selected' : ''}>Thorough, slower</option></select><span class="sub small">Applies to games you import from now on.</span></div>
     <div class="settings-row"><label for="theme"><b>Theme</b></label><select id="theme" data-set="theme">${['system', 'light', 'dark'].map((t) => `<option value="${t}" ${st.theme === t ? 'selected' : ''}>${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}</select></div>
@@ -1126,7 +1151,7 @@ function renderView() {
   else if (ui.tab === 'retry') {
     const se = ui.session;
     if (ui.puzzle) { view.innerHTML = viewPuzzle(); mountPuzzle(); save(); return; }
-    if (se && se.idx < se.ids.length && !ui.drill) { const d = currentDrill(); ui.drill = { id: d.id, phase: 'ask', start: Date.now(), hint: '', hintSq: false, graded: false }; }
+    if (se && se.idx < se.ids.length && !ui.drill) { const d = currentDrill(); ui.drill = { id: d.id, phase: 'ask', start: Date.now(), thinkAt: Date.now(), hint: '', hintSq: false, graded: false }; }
     view.innerHTML = viewRetry();
     if (!ui.session && !ui.puzzle && ui.practice.mode === 'puzzles') refreshPuzzleCount();
     if (ui.session && ui.session.idx < ui.session.ids.length) mountDrill();
@@ -1229,7 +1254,7 @@ document.addEventListener('click', async (e) => {
       if (!dr.graded) { dr.graded = true; gradeDrill(s, d.id, false, Date.now() - dr.start); ui.session.results[d.id] = { ok: false }; save(); }
       nextDrill(); break;
     }
-    case 'again': { const d = currentDrill(); ui.drill = { ...ui.drill, phase: 'ask', hint: ui.drill.hint, hintSq: false, playedUci: null, start: Date.now(), lesson: null, shown: '', idx: 0 }; ui.board.setPosition(d.fen, d.side); ui.board.setEnabled(true); render(); break; }
+    case 'again': { const d = currentDrill(); ui.drill = { ...ui.drill, phase: 'ask', hint: ui.drill.hint, hintSq: false, playedUci: null, start: Date.now(), thinkAt: Date.now(), lesson: null, shown: '', idx: 0 }; ui.board.setPosition(d.fen, d.side); ui.board.setEnabled(true); render(); break; }
     case 'answer': { const d = currentDrill(); ui.drill.shown = 'best'; ui.drill.idx = 0; if (ui.drill.lesson) { refreshLesson(); break; } ui.board.setPosition(d.fen, d.side); const m = ui.board.play(d.bestUci); ui.board.mark(d.bestUci.slice(2, 4), 'good'); ui.board.setEnabled(false); toast(`The answer was ${m.san}`); break; }
     case 'next': nextDrill(); break;
     case 'rep': ui.report = v; render(); break;

@@ -258,3 +258,9 @@ main:focus,main h1:focus{outline:none}
 .ptable th{font-family:var(--f-mono);font-size:.75rem;font-weight:500;color:var(--ink-3);text-align:right;padding:0 0 6px}
 .ptable td{padding:9px 0;border-top:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums}
 .ptable th:first-child,.ptable td:first-child{text-align:left}
+
+.think{margin:12px 0 0;padding:10px 14px;border-radius:12px;background:var(--amber-soft);color:var(--amber);font-size:.9375rem;display:flex;flex-direction:column;gap:8px}
+.think[hidden]{display:none}
+.think b{font-variant-numeric:tabular-nums}
+.tbar{display:block;height:5px;border-radius:3px;background:rgba(0,0,0,.12);overflow:hidden}
+.tbar i{display:block;height:100%;background:var(--amber)}
