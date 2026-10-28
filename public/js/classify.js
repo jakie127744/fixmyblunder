@@ -52,6 +52,35 @@ function bestKind(fenBefore, bestUci) {
   return 'quiet';
 }
 
+/** Material the mover loses (negative) or gains along the played move and the engine's reply line, up to 5 plies. */
+export function lineLoss(fen, playedUci, pv) {
+  const rest = (pv || []).slice(0, 4);
+  let n = 1 + rest.length;
+  if (n < 3) return 0;                 // a single reply says nothing about recaptures
+  if (n % 2 === 0) n--;                // end after the mover's own move
+  const c = new Chess(fen), me = c.turn();
+  const bal = () => { let d = 0; for (const row of c.board()) for (const sq of row) if (sq && sq.type !== 'k') d += (sq.color === me ? 1 : -1) * VAL[sq.type]; return d; };
+  const start = bal();
+  const line = [playedUci, ...rest].slice(0, n);
+  for (const u of line) { try { c.move(uciMove(u)); } catch { return 0; } }
+  return bal() - start;
+}
+
+/** True when the move is by the king, a pawn, or a piece standing within two squares of the king. */
+function nearOwnKing(fen, playedUci) {
+  try {
+    const c = new Chess(fen), me = c.turn();
+    const mv = c.get(playedUci.slice(0, 2));
+    if (!mv) return false;
+    if (mv.type === 'p' || mv.type === 'k') return true;
+    let ks = null;
+    for (const row of c.board()) for (const sq of row) if (sq && sq.type === 'k' && sq.color === me) ks = sq.square;
+    if (!ks) return false;
+    const d = (a, b) => Math.max(Math.abs(a.charCodeAt(0) - b.charCodeAt(0)), Math.abs(+a[1] - +b[1]));
+    return d(ks, playedUci.slice(0, 2)) <= 2;
+  } catch { return false; }
+}
+
 function replyGivesCheck(fenBefore, playedUci, replyUci) {
   if (!replyUci) return false;
   try {
@@ -63,7 +92,7 @@ function replyGivesCheck(fenBefore, playedUci, replyUci) {
 
 /**
  * m: { fenBefore, playedUci, playedSan, bestUci, bestSan, wpBefore, wpAfter, wpLoss,
- *      before:{mate}, after:{mate, pv}, clock, baseTime }
+ *      before:{mate}, after:{mate (you are mated when negative), pv}, clock, baseTime }
  * returns { pattern, explain }
  */
 export function classify(m) {
@@ -77,18 +106,24 @@ export function classify(m) {
   if (m.before.mate > 0 && !(m.after.mate != null && m.after.mate < 0)) {
     return { pattern: 'tactic', explain: `You had checkmate in ${m.before.mate}. ${m.bestSan} was the move.` };
   }
-  if (m.after.mate != null && m.after.mate > 0) {
+  if (m.after.mate != null && m.after.mate < 0) {
     return { pattern: 'king', explain: `${m.playedSan} let ${opp} force checkmate. ${m.bestSan} kept your king safe.` };
+  }
+  const lowClock = m.clock != null && m.clock <= Math.max(10, (m.baseTime || 0) * 0.08);
+  if (lowClock) {
+    return { pattern: 'time', explain: `You had ${Math.round(m.clock)} seconds left. ${m.playedSan} lost ground. ${m.bestSan} was better.` };
+  }
+  const lost = -lineLoss(m.fenBefore, m.playedUci, m.after?.pv);
+  if (lost >= 3 && m.wpLoss >= 15) {
+    const [, r1] = pvToSan(m.fenBefore, [m.playedUci, ...(m.after.pv || [])], 2);
+    return { pattern: 'tactic', explain: `${m.playedSan} walked into a tactic. ${opp} plays ${r1 || 'a strong reply'} and wins ${lost} points of material within a few moves. ${m.bestSan} avoids it.` };
   }
   if (nonPawnMaterial(m.fenBefore) <= 20) {
     const state = m.wpBefore >= 65 ? 'winning' : m.wpBefore >= 40 ? 'equal' : 'difficult';
     return { pattern: 'endgame', explain: `In this ending, ${m.playedSan} let a ${state} position slip. ${m.bestSan} keeps it.` };
   }
-  if (replyGivesCheck(m.fenBefore, m.playedUci, replyUci) && m.wpLoss >= 15) {
+  if (replyGivesCheck(m.fenBefore, m.playedUci, replyUci) && m.wpLoss >= 15 && nearOwnKing(m.fenBefore, m.playedUci)) {
     return { pattern: 'king', explain: `${m.playedSan} weakened your king and ${opp} answered with check. ${m.bestSan} was safer.` };
-  }
-  if (m.clock != null && m.clock <= Math.max(10, (m.baseTime || 0) * 0.08)) {
-    return { pattern: 'time', explain: `You had ${Math.round(m.clock)} seconds left. ${m.playedSan} lost ground. ${m.bestSan} was better.` };
   }
   // Tactic only when the better move is forcing or the engine line actually wins material.
   const kind = bestKind(m.fenBefore, m.bestUci);
@@ -124,8 +159,8 @@ export function reclassify(m, baseTime) {
   return classify({
     fenBefore: m.fen, playedUci: m.playedUci, playedSan: m.playedSan, bestUci: m.bestUci, bestSan: m.bestSan,
     bestPv: m.bestPvUci || [m.bestUci], wpBefore: m.wpBefore, wpAfter: m.wpBefore - m.wpLoss, wpLoss: m.wpLoss,
-    before: { mate: m.bestMate }, after: { mate: m.afterMate ?? null, pv: m.replyUci ? [m.replyUci] : [] },
+    before: { mate: m.bestMate }, after: { mate: m.afterMate ?? null, pv: (m.lines && m.lines.ref) || m.afterPvUci || (m.replyUci ? [m.replyUci] : []) },
     clock: m.clock ?? null, baseTime,
   });
 }
-export const CLASSIFIER_VERSION = 2;
+export const CLASSIFIER_VERSION = 3;

@@ -31,6 +31,31 @@ export function loadIndex() {
   return indexPromise;
 }
 
+let dlPromise = null;
+
+/** Fetches every theme so puzzles work offline. The service worker keeps the files and serves repeats from its cache, so calling this each session is cheap. onProgress(done, total). */
+export function downloadAll(onProgress = () => {}) {
+  if (dlPromise) return dlPromise;
+  dlPromise = (async () => {
+    const idx = await loadIndex();
+    if (!idx) throw new Error('Could not reach the puzzle files.');
+    const ids = Object.keys(idx);
+    let done = 0, next = 0;
+    onProgress(0, ids.length);
+    const worker = async () => {
+      while (next < ids.length) {
+        const id = ids[next++];
+        const res = await fetch(`data/puzzles/${encodeURIComponent(id)}.json`);
+        if (!res.ok) throw new Error('A puzzle set failed to download.');
+        await res.arrayBuffer();
+        onProgress(++done, ids.length);
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+  })().catch((e) => { dlPromise = null; throw e; });
+  return dlPromise;
+}
+
 async function loadTheme(id) {
   if (cache.has(id)) return cache.get(id);
   const res = await fetch(`data/puzzles/${encodeURIComponent(id)}.json`);

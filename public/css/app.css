@@ -191,8 +191,8 @@ textarea{padding:12px 14px;min-height:130px;font-family:var(--f-mono);font-size:
 
 /* Tab bar, sheet, toast */
 .tabs{position:fixed;left:0;right:0;bottom:0;background:color-mix(in srgb,var(--surface) 94%,transparent);backdrop-filter:blur(10px);border-top:1px solid var(--line);display:flex;justify-content:center;padding:6px max(8px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px));z-index:20}
-.tabs nav{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;width:100%;max-width:560px}
-.tabs button{display:flex;flex-direction:column;align-items:center;gap:3px;border:0;background:none;min-height:56px;border-radius:14px;color:var(--ink-3);font-size:0.7813rem;font-weight:600;position:relative}
+.tabs nav{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;width:100%;max-width:560px}
+.tabs button{display:flex;flex-direction:column;align-items:center;gap:3px;border:0;background:none;min-height:56px;border-radius:14px;color:var(--ink-3);font-size:0.7813rem;padding:0 2px;font-weight:600;position:relative}
 .tabs button[aria-current="page"]{color:var(--accent);background:var(--accent-soft)}
 .tabs .badge{position:absolute;top:6px;right:calc(50% - 22px);min-width:18px;height:18px;border-radius:9px;background:var(--amber);color:#fff;font-size:0.75rem;display:grid;place-items:center;padding:0 5px}
 .scrim{position:fixed;inset:0;background:rgba(10,16,12,.5);z-index:40;display:flex;align-items:flex-end;justify-content:center}
@@ -231,3 +231,18 @@ main:focus,main h1:focus{outline:none}
 .legal ul{padding-left:1.2rem}
 .legal .back{display:inline-block;min-height:44px;line-height:44px;font-weight:600}
 @media (forced-colors:active){.sq.sel,.sq.m-good,.sq.m-bad,.sq.m-hint,.sq.m-last{outline:3px solid Highlight;outline-offset:-3px}}
+
+/* explanation + continuation player */
+.lesson{margin-top:14px}
+.lesson.card{box-shadow:none}
+.lesson h3{font-family:var(--f-display);font-size:1.0625rem;font-weight:500;margin:16px 0 4px}
+.lesson h3:first-child{margin-top:0}
+.lesson p{margin:4px 0;color:var(--ink)}
+.lp-steps{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:6px}
+.lp-steps button{display:grid;grid-template-columns:78px 1fr;gap:10px;align-items:start;width:100%;text-align:left;padding:10px 12px;min-height:48px;border:1.5px solid var(--line);border-left-width:5px;border-radius:12px;background:var(--surface);color:var(--ink);font:inherit}
+.lp-steps .mine button{border-left-color:var(--accent)}
+.lp-steps .theirs button{border-left-color:var(--bad)}
+.lp-steps .cur button{background:var(--accent-soft);border-color:var(--accent)}
+.lp-steps .mono{font-weight:700;white-space:nowrap}
+.lp-ctl{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.lp-ctl .btn:disabled{opacity:.45}

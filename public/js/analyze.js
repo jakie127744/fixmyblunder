@@ -53,7 +53,7 @@ export async function analyzeGame(game, engine, { movetime = 70, onProgress } = 
       bestPv: pvToSan(fens[i], before.pv, 5), bestCp: before.cpc, bestMate: before.mate,
       cpAfter: -after.cpc, wpLoss: round1(wpLoss), wpBefore: round1(wpBefore), pattern, explain, clock,
       // kept so the classifier can be re-run later without the engine
-      bestPvUci: before.pv.slice(0, 4), replyUci: after.pv[0] || null, afterMate: after.mate == null ? null : -after.mate,
+      bestPvUci: before.pv.slice(0, 4), replyUci: after.pv[0] || null, afterPvUci: after.pv.slice(0, 6), afterMate: after.mate == null ? null : -after.mate,
     });
   }
   found.sort((a, b) => b.wpLoss - a.wpLoss);

@@ -5,10 +5,11 @@ import { analyzeGame } from './analyze.js';
 import { fetchLichess, fetchChessCom, fromPgnText } from './importer.js';
 import { PATTERNS, PATTERN_ORDER, pat } from './patterns.js';
 import { addDrillsFromGame, patternStats, buildToday, dueCount, todayResults, gradeDrill, streak, gamesByDate, isMastered, minutesTrained, extraDrills, puzzleStats } from './srs.js';
-import { nextPuzzle, countMatching, THEME_GROUPS, MIXED, DIFFICULTY, MOVE_COUNTS, PATTERN_THEME, themeName } from './puzzles.js';
+import { nextPuzzle, countMatching, downloadAll, THEME_GROUPS, MIXED, DIFFICULTY, MOVE_COUNTS, PATTERN_THEME, themeName } from './puzzles.js';
 import { weekly, allTime } from './report.js';
 import { winPct } from './score.js';
 import { pvToSan, reclassify, CLASSIFIER_VERSION } from './classify.js';
+import { buildLesson } from './lessons.js';
 import { Board } from './board.js';
 import { Chess } from '../vendor/chess/chess.js';
 import { esc, plural, fmtDay, fmtRange, addDays, weekStart, DAY } from './util.js';
@@ -36,6 +37,43 @@ function getEngine() {
     engine = e;
   }
   return engine;
+}
+
+/* ------------------------------------------------------------------ engine lines for explanations */
+const LINES_V = 1;
+const fenAfterMove = (fen, uci) => { const c = new Chess(fen); c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }); return c.fen(); };
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('The engine took too long.')), ms))]);
+
+/**
+ * The lines behind an explanation: what follows the best move, and what follows the move that was played.
+ * Searched a little deeper than the game analysis, once, then kept on the mistake (and its drill copy).
+ * Falls back to the short lines stored at analysis time if the engine is busy or unavailable.
+ */
+async function ensureLines(m, needRef) {
+  const have = m.lines && m.lines.v === LINES_V ? m.lines : { v: LINES_V };
+  const todo = [];
+  if (!have.bestRest) todo.push('best');
+  if (needRef && !have.ref) todo.push('ref');
+  if (todo.length) {
+    try {
+      const eng = getEngine();
+      const run = (uci) => eng.evaluate(fenAfterMove(m.fen, uci), { movetime: 350 });
+      const res = await withTimeout(Promise.all(todo.map((k) => run(k === 'best' ? m.bestUci : m.playedUci))), 8000);
+      todo.forEach((k, i) => {
+        if (k === 'best') have.bestRest = res[i].pv.slice(0, 8);
+        else { have.ref = res[i].pv.slice(0, 8); have.refMate = res[i].mate; }
+      });
+      m.lines = have;
+      const s = state(), twin = s.drills[m.id] || (s.games[m.gameId] && s.games[m.gameId].mistakes.find((x) => x.id === m.id));
+      if (twin) twin.lines = have;
+      save();
+    } catch (e) { logError('lesson-lines', e); }
+  }
+  return {
+    bestRest: have.bestRest || (m.bestPvUci || []).slice(1),
+    ref: have.ref || m.afterPvUci || (m.replyUci ? [m.replyUci] : []),
+    refMate: have.ref ? have.refMate : (m.afterMate != null && m.afterMate < 0 ? -m.afterMate : null),
+  };
 }
 
 /* ------------------------------------------------------------------ helpers */
@@ -388,6 +426,7 @@ function fbHtml() {
     : `${esc(dr.san)} drops about ${Math.round(dr.drop)}% win chance.`;
   h += `<div class="fb ${dr.ok ? 'good' : 'bad'}" role="status"><b>${head}</b><p>${body}</p><p style="margin-top:8px">${esc(d.explain)}</p>
     <p class="small sub" style="margin-top:8px">${dr.ok ? 'It comes back for review on a spaced schedule.' : 'It returns tomorrow so you can try again.'}</p></div>
+    ${lessonSection(dr.lesson, dr, 'lesson card')}
     <details class="eng"><summary>What the coach sees</summary><p>In your game you played <span class="mono">${esc(d.playedSan)}</span>. Engine line: <span class="mono">${esc(line)}</span>.</p><p>Evaluation for you: ${evalTxt(d.bestCp, d.bestMate)} with the best move, ${evalTxt(d.cpAfter)} after ${esc(d.playedSan)}. Checked on this device with Stockfish.</p></details>`;
   return h;
 }
@@ -413,6 +452,7 @@ function mountDrill() {
   // re-apply state after a rerender mid-drill
   const dr = ui.drill;
   if (dr.phase !== 'ask' && dr.playedUci) { ui.board.play(dr.playedUci); ui.board.mark(dr.playedUci.slice(2, 4), dr.ok ? 'good' : 'bad'); }
+  if (dr.phase === 'done' && dr.lesson && dr.shown) lpApply();
   if (dr.hintSq) ui.board.mark(d.bestUci.slice(0, 2), 'hint');
 }
 
@@ -422,12 +462,12 @@ async function answer(uci, san) {
   dr.playedUci = uci; dr.san = san; dr.phase = 'checking';
   ui.board.play(uci); ui.board.setEnabled(false);
   rerenderDrillPanel();
-  let ok, exact = uci === d.bestUci, drop = 0;
+  let ok, exact = uci === d.bestUci, drop = 0, ev = null;
   if (exact) ok = true;
   else {
     try {
       const after = ui.board.fen();
-      const ev = await getEngine().evaluate(after, { movetime: 250 });
+      ev = await getEngine().evaluate(after, { movetime: 250 });
       const userCp = -ev.cpc;
       drop = Math.max(0, winPct(d.bestCp) - winPct(userCp));
       ok = drop <= 7;
@@ -446,6 +486,24 @@ async function answer(uci, san) {
   if (navigator.vibrate) try { navigator.vibrate(ok ? 15 : [30, 40, 30]); } catch { /* ignore */ }
   render();
   setTimeout(() => announce(`${ok ? (exact ? 'Best move.' : 'A good move.') : 'That gives up too much.'} ${d.explain}`), 700);
+  loadDrillLesson(d, dr, ev);
+}
+
+/** Works out why the move was right or wrong, then fills in the explanation under the board. */
+async function loadDrillLesson(d, dr, ev) {
+  const same = dr.playedUci === d.playedUci;
+  const lines = await ensureLines(d, !dr.exact && same);
+  if (ui.drill !== dr) return;
+  dr.lesson = buildLesson({
+    fen: d.fen, playedUci: dr.playedUci, bestUci: d.bestUci, bestRest: lines.bestRest,
+    refPv: dr.exact ? [] : same ? lines.ref : (ev ? ev.pv.slice(0, 8) : []),
+    refMate: dr.exact ? null : same ? lines.refMate : (ev ? ev.mate : null),
+    wpBefore: d.wpBefore, wpLoss: same ? d.wpLoss : dr.drop, bestMate: d.bestMate,
+    verdict: dr.exact ? 'best' : dr.ok ? 'good' : 'bad',
+  });
+  if (!dr.shown) { dr.shown = dr.exact ? 'best' : 'played'; dr.idx = 0; }
+  rerenderDrillPanel(); lpApply();
+  announce(dr.lesson.played.points.join(' '));
 }
 
 function rerenderDrillPanel() {
@@ -462,8 +520,9 @@ function nextDrill() {
 /* ------------------------------------------------------------------ Practice hub */
 function viewHub() {
   const s = state(), pr = ui.practice;
-  const games = pr.mode === 'games';
-  const modeBar = `<div class="mode" role="tablist" aria-label="Practice source"><button role="tab" data-act="mode" data-v="games" aria-selected="${games}">My games</button><button role="tab" data-act="mode" data-v="puzzles" aria-selected="${!games}">Puzzles</button></div>`;
+  const onPuzzleTab = ui.tab === 'puzzles';
+  const games = pr.mode === 'games' && !onPuzzleTab;
+  const modeBar = onPuzzleTab ? '' : `<div class="mode" role="tablist" aria-label="Practice source"><button role="tab" data-act="mode" data-v="games" aria-selected="${games}">My games</button><button role="tab" data-act="mode" data-v="puzzles" aria-selected="${!games}">Puzzles</button></div>`;
   const chip = (act, v, label, on, off) => `<button data-act="${act}" data-v="${v}" aria-pressed="${on}" ${off ? 'disabled' : ''}>${label}</button>`;
   if (games) {
     const t = buildToday(s), res = todayResults(s);
@@ -486,8 +545,9 @@ function viewHub() {
       <div class="cta"><button class="btn" data-act="practice" ${avail ? '' : 'disabled'}>${avail ? `Start ${plural(n, 'drill')}` : 'No drills available'}</button></div></section>`;
   }
   const ps = puzzleStats(s);
-  return `<section class="view"><p class="eyebrow">Practice</p><h1 class="h1">Do more, your way</h1>${modeBar}
+  return `<section class="view"><p class="eyebrow">${onPuzzleTab ? 'Puzzles' : 'Practice'}</p><h1 class="h1">${onPuzzleTab ? 'Sharpen your tactics' : 'Do more, your way'}</h1>${modeBar}
     <p class="sub" style="margin-top:12px">Puzzles sorted by theme. They are separate from your own games, are not scheduled for review, and work offline.</p>
+    <p class="sub small" id="pzDl" style="margin-top:6px" aria-live="polite"></p>
     <div class="stack" style="margin-top:12px">
       <section class="card"><div class="row"><h2 class="h2">Choose a theme</h2><span class="tag">${ps.todaySolved} solved today \u00b7 ${ps.solved} total</span></div>
         <div class="chips" style="margin-top:10px" role="group" aria-label="Theme">${chip('pt', MIXED[0], MIXED[1], pr.theme === MIXED[0], false)}</div>
@@ -503,9 +563,18 @@ function viewHub() {
       <button class="btn" data-act="puzzle-start" id="pzStart">Start ${esc(themeName(pr.theme))} puzzles</button></div></section>`;
 }
 
+/** First visit: fetch all puzzle sets once (about 0.3 MB compressed) so they work offline. */
+function ensurePuzzlesSaved() {
+  const el = () => $('#pzDl');
+  downloadAll((d, n) => { if (el()) el().textContent = `Saving puzzles for offline use… ${d} of ${n}`; })
+    .then(() => { if (el()) el().textContent = 'Saved on this device for offline use.'; })
+    .catch(() => { if (el()) el().textContent = 'Could not save puzzles for offline use. Connect and reopen this tab to retry.'; });
+}
+
 async function refreshPuzzleCount() {
   const pr = ui.practice, el = $('#pzCount'), btn = $('#pzStart');
   if (!el) return;
+  ensurePuzzlesSaved();
   try {
     const n = await countMatching(pr.theme, { moves: pr.moves, difficulty: pr.difficulty });
     if (!$('#pzCount') || ui.practice !== pr) return;
@@ -799,6 +868,60 @@ async function manualSync(count) {
   ui.syncing = false; render();
 }
 
+/* ------------------------------------------------------------------ Explanation + line player (drill feedback and game review) */
+const curLesson = () => (ui.review ? (ui.review.lessons || {})[(rvKey(ui.review) || {}).id] : ui.drill && ui.drill.lesson);
+
+/** The "why" text plus the continuation, one row per move, with the board following along. `h` holds { shown, idx }. */
+function lessonSection(L, h, cls) {
+  if (!L) return `<div class="${cls}"><p class="sub small" role="status">Working out why<span class="thinking"><i></i><i></i><i></i></span></p></div>`;
+  const key = h.shown || (L.verdict === 'best' ? 'best' : 'played'), line = L[key];
+  const idx = h.shown ? h.idx : -1;
+  const texts = (l) => `<h3>${esc(l.title)}</h3>${l.points.map((p) => `<p>${esc(p)}</p>`).join('')}`;
+  const tog = L.verdict === 'best' ? '' : `<div class="chips" role="group" aria-label="Which line to play out" style="margin-top:10px">${['played', 'best'].map((k) => `<button data-act="lp-pick" data-v="${k}" aria-pressed="${key === k}">${k === 'played' ? 'Your move' : 'Best'} <b class="mono">${esc(L[k].san)}</b></button>`).join('')}</div>`;
+  const rows = line.steps.map((s, i) => `<li class="${s.mine ? 'mine' : 'theirs'}${i === idx ? ' cur' : ''}"><button data-act="lp-go" data-v="${i}" aria-current="${i === idx}"><b class="mono">${esc(s.label)} ${esc(s.san)}</b><span>${esc(s.note)}</span></button></li>`).join('');
+  return `<div class="${cls}">
+    ${texts(L.played)}${L.verdict === 'best' ? '' : texts(L.best)}
+    <h3>Play it out</h3>${tog}
+    <ol class="lp-steps" aria-label="Moves in this line">${rows}</ol>
+    <div class="lp-ctl"><button class="btn ghost" data-act="lp-prev"${idx < 0 ? ' disabled' : ''}>\u2039 Back</button><button class="btn ghost" data-act="lp-next"${idx >= line.steps.length - 1 ? ' disabled' : ''}>Next \u203a</button></div>
+  </div>`;
+}
+
+/** Put the board on the shown line, up to the chosen move. */
+function lpApply() {
+  const h = ui.review || ui.drill, L = curLesson();
+  if (!h || !L || !h.shown || !ui.board) return;
+  const line = L[h.shown];
+  ui.board.setPosition(L.fen, L.mover);
+  ui.board.setEnabled(false);
+  for (let i = 0; i <= h.idx && i < line.steps.length; i++) ui.board.play(line.steps[i].uci);
+  const cur = line.steps[h.idx];
+  if (cur && h.idx === 0) ui.board.mark(cur.to, h.shown === 'played' && L.verdict === 'bad' ? 'bad' : 'good');
+  else if (cur && cur.mine && h.shown === 'best') ui.board.mark(cur.to, 'good');
+}
+
+/** Redraw the explanation after a line or step change and keep keyboard focus on the same control. */
+function refreshLesson() {
+  const a = document.activeElement, d = a && a.dataset ? a.dataset : {};
+  if (ui.review) { render(); return; }
+  rerenderDrillPanel(); lpApply();
+  if (d.act) { const n = document.querySelector(`#fb [data-act="${d.act}"]${d.v != null ? `[data-v="${CSS.escape(d.v)}"]` : ''}`); if (n && !n.disabled) n.focus({ preventScroll: true }); }
+}
+
+/** Works out the lines behind a game mistake the first time it is shown. */
+function loadReviewLesson(rv, km) {
+  if (rv.lessons[km.id] || rv.loading === km.id) return;
+  rv.loading = km.id;
+  ensureLines(km, true).then((lines) => {
+    rv.loading = null;
+    rv.lessons[km.id] = buildLesson({
+      fen: km.fen, playedUci: km.playedUci, bestUci: km.bestUci, refPv: lines.ref, bestRest: lines.bestRest,
+      wpBefore: km.wpBefore, wpLoss: km.wpLoss, refMate: lines.refMate, bestMate: km.bestMate, verdict: 'bad',
+    });
+    if (ui.review === rv && rvKey(rv) === km) { render(); announce(rv.lessons[km.id].played.points.join(' ')); }
+  });
+}
+
 /* ------------------------------------------------------------------ Game review */
 /** Only the biggest mistakes in a game: at least 12 points of win chance, at most five. */
 const keyMoments = (g) => g.mistakes.filter((m) => m.wpLoss >= 12).sort((a, b) => b.wpLoss - a.wpLoss).slice(0, 5).sort((a, b) => a.ply - b.ply);
@@ -808,7 +931,7 @@ const rvKey = (rv) => (rv.mode === 'full' ? rv.keys.find((m) => m.ply === rv.p) 
 function openReview(id, ply) {
   const g = state().games[id];
   if (!g) return;
-  const rv = { id, p: 0, shown: '', keys: keyMoments(g), mode: g.sans ? 'full' : 'moments', fens: [], moves: [] };
+  const rv = { id, p: 0, shown: '', keys: keyMoments(g), mode: g.sans ? 'full' : 'moments', fens: [], moves: [], idx: 0, lessons: {}, loading: null };
   if (rv.mode === 'full') {
     const c = new Chess();
     rv.fens.push(c.fen());
@@ -862,6 +985,7 @@ function viewReview() {
   const panel = km
     ? `<section class="card" style="margin-top:12px"><div class="row"><span class="tag bad">\u2212${Math.round(km.wpLoss)}% win chance</span><span class="tag">${esc(nameOf(km.pattern))}</span></div>
         <p class="coach" style="font-size:17px;margin-top:10px">${esc(km.explain)}</p>
+        ${lessonSection(rv.lessons[km.id], rv, 'lesson')}
         ${s.drills[km.id] ? '<button class="btn" style="margin-top:12px" data-act="rv-drill">Drill this position</button>' : ''}</section>`
     : (rv.mode === 'full' && rv.p > 0 ? '<p class="sub small" style="margin-top:12px">Nothing to fix here. Use the arrows, or jump to a mistake above.</p>' : '');
   return `<section class="view">
@@ -883,7 +1007,8 @@ function mountReview() {
   const km = rvKey(rv);
   const fen = rv.mode === 'full' ? rv.fens[rv.p] : km.fen;
   ui.board = new Board(el, { fen, orientation: g.color === 'white' ? 'w' : 'b', canMove: false });
-  if (km && rv.shown) {
+  if (km && rv.shown && rv.lessons[km.id]) lpApply();
+  else if (km && rv.shown) {
     ui.board.setPosition(km.fen, g.color === 'white' ? 'w' : 'b');
     ui.board.setEnabled(false);
     const uci = rv.shown === 'played' ? km.playedUci : km.bestUci;
@@ -893,6 +1018,7 @@ function mountReview() {
     const m = rv.moves[rv.p - 1];
     ui.board.mark(m.from, 'last'); ui.board.mark(m.to, 'last');
   }
+  if (km) loadReviewLesson(rv, km);
   announce(`${reviewLabel(rv)}.${km ? ` Mistake, lost ${Math.round(km.wpLoss)} percent win chance. You played ${km.playedSan}, best was ${km.bestSan}. ${km.explain}` : ''}`);
 }
 
@@ -966,6 +1092,11 @@ function renderView() {
     view.innerHTML = viewDiagnose();
   }
   else if (ui.tab === 'report') view.innerHTML = viewReport();
+  else if (ui.tab === 'puzzles') {
+    if (ui.puzzle) { view.innerHTML = viewPuzzle(); mountPuzzle(); save(); return; }
+    view.innerHTML = viewHub();
+    refreshPuzzleCount();
+  }
   else if (ui.tab === 'retry') {
     const se = ui.session;
     if (ui.puzzle) { view.innerHTML = viewPuzzle(); mountPuzzle(); save(); return; }
@@ -1026,12 +1157,20 @@ document.addEventListener('click', async (e) => {
       rv.p = Math.max(0, Math.min(rv.fens.length - 1, Math.round(((e.clientX - r.left) / r.width) * (rv.fens.length - 1))));
       rv.shown = ''; render(); break;
     }
-    case 'rv-mine': ui.review.shown = 'played'; render(); break;
-    case 'rv-best': ui.review.shown = 'best'; render(); break;
+    case 'rv-mine': ui.review.shown = 'played'; ui.review.idx = 0; render(); break;
+    case 'rv-best': ui.review.shown = 'best'; ui.review.idx = 0; render(); break;
+    case 'lp-pick': { const h = ui.review || ui.drill; h.shown = v; h.idx = 0; refreshLesson(); break; }
+    case 'lp-go': { const h = ui.review || ui.drill; h.shown = h.shown || (curLesson().verdict === 'best' ? 'best' : 'played'); h.idx = +v; refreshLesson(); break; }
+    case 'lp-prev': case 'lp-next': {
+      const h = ui.review || ui.drill, L = curLesson();
+      h.shown = h.shown || (L.verdict === 'best' ? 'best' : 'played');
+      h.idx = Math.max(-1, Math.min(L[h.shown].steps.length - 1, h.idx + (a === 'lp-next' ? 1 : -1)));
+      refreshLesson(); break;
+    }
     case 'rv-reset': ui.review.shown = ''; render(); break;
     case 'rv-drill': { const km = rvKey(ui.review); if (km && s.drills[km.id]) { ui.review = null; startSession([km.id], 'From your game'); } break; }
     case 'rv-load': backfillMoves(); break;
-    case 'hub': ui.session = null; ui.drill = null; ui.puzzle = null; nav('retry'); break;
+    case 'hub': ui.session = null; ui.drill = null; ui.puzzle = null; nav(ui.tab === 'puzzles' ? 'puzzles' : 'retry'); break;
     case 'mode': ui.practice.mode = v; render(); break;
     case 'pp': ui.practice.pattern = v; render(); break;
     case 'pn': ui.practice.n = +v; render(); break;
@@ -1044,7 +1183,7 @@ document.addEventListener('click', async (e) => {
       if (!ids.length) { toast('No drills available for that choice.'); break; }
       startSession(ids, ui.practice.pattern === 'all' ? 'Practice' : nameOf(ui.practice.pattern)); break;
     }
-    case 'puzzle-start': ui.session = null; ui.drill = null; ui.puzzle = { theme: ui.practice.theme, difficulty: ui.practice.difficulty, moves: ui.practice.moves, seen: new Set(state().puzzleSeen || []), solved: 0, tried: 0, phase: 'loading' }; ui.tab = 'retry'; loadPuzzle(); break;
+    case 'puzzle-start': ui.session = null; ui.drill = null; ui.puzzle = { theme: ui.practice.theme, difficulty: ui.practice.difficulty, moves: ui.practice.moves, seen: new Set(state().puzzleSeen || []), solved: 0, tried: 0, phase: 'loading' }; if (ui.tab !== 'puzzles') ui.tab = 'retry'; loadPuzzle(); break;
     case 'puzzle-next': loadPuzzle(); break;
     case 'pz-hint': { const pz = ui.puzzle; pz.hint = true; ui.board.mark(pz.p.solution[pz.step].slice(0, 2), 'hint'); pzRefresh(); break; }
     case 'pz-skip': {
@@ -1064,8 +1203,8 @@ document.addEventListener('click', async (e) => {
       if (!dr.graded) { dr.graded = true; gradeDrill(s, d.id, false, Date.now() - dr.start); ui.session.results[d.id] = { ok: false }; save(); }
       nextDrill(); break;
     }
-    case 'again': { const d = currentDrill(); ui.drill = { ...ui.drill, phase: 'ask', hint: ui.drill.hint, hintSq: false, playedUci: null, start: Date.now() }; ui.board.setPosition(d.fen, d.side); ui.board.setEnabled(true); render(); break; }
-    case 'answer': { const d = currentDrill(); ui.board.setPosition(d.fen, d.side); const m = ui.board.play(d.bestUci); ui.board.mark(d.bestUci.slice(2, 4), 'good'); ui.board.setEnabled(false); toast(`The answer was ${m.san}`); break; }
+    case 'again': { const d = currentDrill(); ui.drill = { ...ui.drill, phase: 'ask', hint: ui.drill.hint, hintSq: false, playedUci: null, start: Date.now(), lesson: null, shown: '', idx: 0 }; ui.board.setPosition(d.fen, d.side); ui.board.setEnabled(true); render(); break; }
+    case 'answer': { const d = currentDrill(); ui.drill.shown = 'best'; ui.drill.idx = 0; if (ui.drill.lesson) { refreshLesson(); break; } ui.board.setPosition(d.fen, d.side); const m = ui.board.play(d.bestUci); ui.board.mark(d.bestUci.slice(2, 4), 'good'); ui.board.setEnabled(false); toast(`The answer was ${m.san}`); break; }
     case 'next': nextDrill(); break;
     case 'rep': ui.report = v; render(); break;
     case 'wk': if (!(+v > 0 && ui.weekOffset >= 0)) { ui.weekOffset += +v; render(); } break;
@@ -1106,7 +1245,7 @@ document.addEventListener('change', (e) => { if (e.target.id === 'fbDetails') up
 document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches && e.target.matches('[role=button][data-act]')) e.target.click(); });
 $('#settingsBtn').addEventListener('click', openSettings);
 $('#streakChip').addEventListener('click', () => nav('today'));
-window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (['today', 'diagnose', 'retry', 'report'].includes(t) && t !== ui.tab) { ui.tab = t; render(); } });
+window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (['today', 'diagnose', 'retry', 'puzzles', 'report'].includes(t) && t !== ui.tab) { ui.tab = t; render(); } });
 const setOffline = () => { $('#offline').hidden = navigator.onLine; };
 window.addEventListener('online', setOffline); window.addEventListener('offline', setOffline); setOffline();
 
@@ -1133,7 +1272,7 @@ function migrate() {
 migrate();
 watchGlobalErrors(() => toast('Something went wrong. Open Settings, then Send feedback, to report it.'));
 const h = location.hash.slice(1);
-if (['today', 'diagnose', 'retry', 'report'].includes(h)) ui.tab = h;
+if (['today', 'diagnose', 'retry', 'puzzles', 'report'].includes(h)) ui.tab = h;
 render();
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 export { onChange, DAY, pvToSan };
