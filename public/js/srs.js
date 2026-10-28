@@ -22,16 +22,39 @@ export function addDrillsFromGame(s, game) {
 
 export const gamesByDate = (s) => Object.values(s.games).sort((a, b) => b.date - a.date);
 
-/** Per-pattern totals over the latest n games. cost = win-percentage points lost. */
-export function patternStats(s, n = 25) {
-  const games = gamesByDate(s).slice(0, n);
-  const out = Object.fromEntries(PATTERN_ORDER.map((p) => [p, { id: p, count: 0, cost: 0, perGame: 0 }]));
-  for (const g of games) for (const m of g.mistakes) { out[m.pattern].count++; out[m.pattern].cost += m.wpLoss; }
-  for (const p of PATTERN_ORDER) out[p].perGame = games.length ? out[p].count / games.length : 0;
-  return { games: games.length, list: PATTERN_ORDER.map((p) => out[p]).sort((a, b) => b.cost - a.cost) };
+/**
+ * The one aggregation behind Diagnose, Report and the week card. Every pattern figure in the app comes from here.
+ *   count   = mistakes of that pattern in the given games
+ *   cost    = sum of their win-chance losses (points)
+ *   perGame = count / games, and costPerGame = cost / games
+ *   per25   = count * 25 / games, the "per 25 games" normalisation (equals count when games is 25)
+ */
+export function tally(games) {
+  const n = games.length;
+  const by = Object.fromEntries(PATTERN_ORDER.map((p) => [p, { id: p, count: 0, cost: 0, perGame: 0, costPerGame: 0, per25: 0 }]));
+  for (const g of games) for (const m of g.mistakes) { const t = by[m.pattern]; if (t) { t.count++; t.cost += m.wpLoss; } }
+  for (const p of PATTERN_ORDER) {
+    const t = by[p];
+    t.perGame = n ? t.count / n : 0;
+    t.costPerGame = n ? t.cost / n : 0;
+    t.per25 = n ? (t.count * 25) / n : 0;
+  }
+  return { games: n, byPattern: by, list: PATTERN_ORDER.map((p) => by[p]).sort((a, b) => b.cost - a.cost) };
 }
 
-export function gradeDrill(s, id, ok, ms) {
+/** Per-pattern totals over the latest n games. cost = win-percentage points lost. */
+export function patternStats(s, n = 25) {
+  return tally(gamesByDate(s).slice(0, n));
+}
+
+/**
+ * meta (optional): { hint, retried } from the drill screen. A solve is "deliberate" when it was right,
+ * first try, with no hint, and at least MIN_THINK_MS passed since the position appeared. A fast solve never counts.
+ */
+export const MIN_THINK_MS = 5000;
+export const isDeliberate = (ok, ms, meta = {}) => !!ok && !meta.hint && !meta.retried && ms >= MIN_THINK_MS;
+
+export function gradeDrill(s, id, ok, ms, meta = {}) {
   const d = s.drills[id];
   if (!d) return;
   const now = Date.now();
@@ -47,7 +70,20 @@ export function gradeDrill(s, id, ok, ms) {
     d.due = dayKey(addDays(now, 1));
   }
   d.history.push({ t: now, ok });
-  s.attempts.push({ t: now, id, ok, ms: Math.min(ms || 0, MAX_ATTEMPT_MS) });
+  s.attempts.push({ t: now, id, ok, ms: Math.min(ms || 0, MAX_ATTEMPT_MS), deliberate: isDeliberate(ok, ms, meta) });
+}
+
+/**
+ * Deliberate streak: drills in a row that were deliberate solves. A hint, a wrong or retried answer, a skip
+ * or a rushed solve ends the run. Taking longer never does: the lock is a floor, not a timer that runs out.
+ */
+export function deliberateStreak(s) {
+  let run = 0, best = 0;
+  for (const a of s.attempts) {
+    if (a.kind === 'puzzle') continue;
+    if (a.deliberate) { run++; if (run > best) best = run; } else run = 0;
+  }
+  return { current: run, best };
 }
 
 export const isMastered = (d) => d.box != null && d.box >= MASTERED_BOX;
@@ -80,6 +116,12 @@ export function buildToday(s) {
 export function dueCount(s) {
   const key = dayKey();
   return Object.values(s.drills).filter((d) => d.box != null && !isMastered(d) && d.due <= key).length;
+}
+
+/** Missed or skipped drills come back the next day; reviews not yet due are unaffected. */
+export function dueTomorrowCount(s) {
+  const key = dayKey(addDays(Date.now(), 1));
+  return Object.values(s.drills).filter((d) => d.box != null && !isMastered(d) && d.due === key).length;
 }
 
 /** Attempts logged today per drill id. */

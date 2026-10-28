@@ -271,3 +271,9 @@ main:focus,main h1:focus{outline:none}
 .thinkmini.on{visibility:visible}
 .thinkmini .tbar{width:48px;height:3px}
 .thinkmini .tbar i{background:var(--ink-3)}
+.scope{display:inline-block;font-size:.75rem;font-weight:500;color:var(--ink-3);margin-top:2px}
+p.scope{display:block;margin:0 0 6px}
+.fastlist{list-style:none;margin:0;padding:0}
+.fastlist li{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;padding:6px 0;border-top:1px solid var(--line)}
+.fastlist li .bad{color:var(--bad);font-weight:600}
+#plCoach:not(:empty){margin-top:12px}

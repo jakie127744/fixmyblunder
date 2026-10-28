@@ -2,8 +2,12 @@
 import assert from 'node:assert/strict';
 import { winPct, moveAccuracy } from '../public/js/score.js';
 import { classify, pvToSan, nonPawnMaterial, materialGain, reclassify, lineLoss } from '../public/js/classify.js';
-import { gradeDrill, streak, INTERVALS, buildToday, addDrillsFromGame, extraDrills, puzzleStats } from '../public/js/srs.js';
-import { parsePgn } from '../public/js/importer.js';
+import { gradeDrill, streak, INTERVALS, buildToday, addDrillsFromGame, extraDrills, puzzleStats, tally, patternStats, deliberateStreak, isDeliberate, dueTomorrowCount } from '../public/js/srs.js';
+import { parsePgn, readPgn, fromPgnText, MIN_PLIES, skipText } from '../public/js/importer.js';
+import { allTime, weekly } from '../public/js/report.js';
+import { clearAccountData, state } from '../public/js/store.js';
+import { SAMPLE_DRILLS } from '../public/js/samples.js';
+import { Chess } from '../public/vendor/chess/chess.js';
 import { dayKey, addDays } from '../public/js/util.js';
 import { reminderIcs, validTime } from '../public/js/reminder.js';
 import { buildLesson, walkLine, lineText, points } from '../public/js/lessons.js';
@@ -132,5 +136,96 @@ t('a check reply only means king safety when the move was near the king', () => 
 t('very little time is time trouble even in an ending', () => {
   const r = classify({ fenBefore: '4k3/8/8/8/8/8/4P3/R3K2R w - - 0 1', playedUci: 'e2e3', playedSan: 'e3', bestUci: 'a1a8', bestSan: 'Ra8+', wpBefore: 60, wpAfter: 40, wpLoss: 20, before: { mate: null }, after: { mate: null, pv: ['e8d7'] }, clock: 5, baseTime: 300 });
   assert.equal(r.pattern, 'time');
+});
+
+const game = (pgnMoves, { white = 'me', black = 'you', result = '1-0' } = {}) => `[Event "x"]\n[White "${white}"]\n[Black "${black}"]\n[Result "${result}"]\n\n${pgnMoves} ${result}`;
+const SHORT = game('1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6', { black: 'Opp' });                        // 8 plies
+const LONG = game('1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 6. Re1 b5');                      // 12 plies
+t('a short game is skipped for being short, not for the username (B1, B2)', () => {
+  const r = readPgn(SHORT, 'me');
+  assert.equal(r.reason, 'short');
+  assert.equal(r.plies, 8);
+  assert.match(skipText(r), new RegExp(`${MIN_PLIES} minimum`));
+});
+t('a real name mismatch is reported as a name mismatch', () => {
+  assert.equal(readPgn(LONG, 'someone else').reason, 'name');
+});
+t('pasting 3 games returns counts and a reason for the skipped one (B1)', () => {
+  const r = fromPgnText([LONG, SHORT, LONG.replace('b5 1-0', 'b5 7. Bb3 d6 1-0')].join('\n\n'), 'me');
+  assert.equal(r.pasted, 3);
+  assert.equal(r.games.length, 2);
+  assert.deepEqual(r.skipped.map((x) => x.reason), ['short']);
+});
+t('unfinished games are not called draws (B5)', () => {
+  const mv = '1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 6. Re1 b5';
+  assert.equal(parsePgn(game(mv, { result: '*' }), 'me').result, 'unfinished');
+  assert.equal(parsePgn(game(mv, { result: '1/2-1/2' }), 'me').result, 'draw');
+});
+const mk = (id, date, ms) => ({ id, date, accuracy: 80, mistakes: ms.map((p, i) => ({ id: `${id}:${i}`, pattern: p, wpLoss: 10 + i, ply: 20 + i, fen: `${id}${i}` })) });
+t('Report all-time figures equal the Diagnose figures (A2)', () => {
+  const s = blank();
+  const pats = ['hanging', 'tactic', 'advantage', 'positional', 'king', 'endgame', 'time'];
+  for (let i = 0; i < 25; i++) s.games['g' + i] = mk('g' + i, Date.now() - i * 86400000, pats.slice(0, (i % 4) + 1));
+  const dg = patternStats(s), a = allTime(s);
+  assert.equal(a.lateGames, 25);
+  for (const p of a.patterns) {
+    const d = dg.list.find((x) => x.id === p.id);
+    assert.equal(p.nowCount, d.count);
+    assert.equal(p.now, Math.round(d.count * 10) / 10);                         // per 25 games with 25 games = the count itself
+    assert.equal(p.nowCost, Math.round(d.cost / 25 * 10) / 10);
+  }
+  assert.equal(weekly(s).topPattern, dg.list[0].id);                            // week card ranks patterns the way Diagnose does
+});
+t('Report uses the same latest-25 window as Diagnose when more games are stored (A2)', () => {
+  const s = blank();
+  for (let i = 0; i < 40; i++) s.games['g' + i] = mk('g' + i, Date.now() - i * 86400000, i % 2 ? ['tactic'] : ['tactic', 'hanging']);
+  const a = allTime(s), dg = patternStats(s);
+  assert.equal(a.lateGames, 25);
+  assert.equal(a.patterns.find((p) => p.id === 'hanging').nowCount, dg.byPattern.hanging.count);
+});
+t('account switch leaves no data behind (A1)', () => {
+  const s = state();
+  s.profile = { source: 'pgn', username: 'a' }; s.games.x = mk('x', 1, ['tactic']); s.drills.y = { id: 'y' }; s.attempts.push({ t: 1, id: 'y', ok: true, ms: 1 }); s.today = { date: 'd', ids: ['y'] }; s.lastSync = 5; s.puzzleSeen = ['p'];
+  clearAccountData();
+  assert.equal(Object.keys(s.games).length + Object.keys(s.drills).length + s.attempts.length, 0);
+  assert.equal(s.profile, null); assert.equal(s.today, null); assert.equal(s.lastSync, null); assert.equal(s.puzzleSeen, undefined);
+  assert.equal(s.settings.thinkSecs, 5);                                        // device settings stay, and Think first defaults to 5 s (E1)
+});
+t('a capture is never called "no tactic involved" (C4)', () => {
+  const base = { playedUci: 'a2a3', playedSan: 'a3', wpBefore: 55, wpAfter: 40, wpLoss: 15, before: { mate: null }, after: { mate: null, pv: ['e8e7'] }, clock: null };
+  const fen = 'r3k2r/pppqbppp/2n1pn2/3p4/3P4/2N1PN2/PPP2PPP/R2QKB1R w KQkq - 0 1';
+  const cap = classify({ ...base, fenBefore: fen, bestUci: 'c3d5', bestSan: 'Nxd5' });
+  assert.equal(cap.pattern, 'positional');
+  assert.doesNotMatch(cap.explain, /no tactic/);
+  const quiet = classify({ ...base, fenBefore: fen, bestUci: 'f1e2', bestSan: 'Be2' });
+  assert.match(quiet.explain, /no tactic involved/);
+});
+t('deliberate streak: only first-try, no-hint, post-5s solves advance it (E2)', () => {
+  assert.equal(isDeliberate(true, 6000, {}), true);
+  assert.equal(isDeliberate(true, 2000, {}), false);                            // fast
+  assert.equal(isDeliberate(true, 9000, { hint: true }), false);
+  assert.equal(isDeliberate(true, 9000, { retried: true }), false);
+  assert.equal(isDeliberate(false, 9000, {}), false);
+  const s = blank();
+  const add = (id, ok, ms, meta) => { s.drills[id] = { id, box: null, due: null, history: [] }; gradeDrill(s, id, ok, ms, meta); };
+  add('a', true, 8000, {}); add('b', true, 8000, {});
+  assert.equal(deliberateStreak(s).current, 2);
+  add('c', true, 1500, {});                                                    // rushed: does not count
+  assert.equal(deliberateStreak(s).current, 0);
+  add('d', true, 30000, {});                                                   // taking longer never hurts
+  assert.equal(deliberateStreak(s).current, 1);
+});
+t('a missed drill shows as due tomorrow, not due today (C2)', () => {
+  const s = blank();
+  s.drills.a = { id: 'a', box: null, due: null, history: [] };
+  gradeDrill(s, 'a', false, 3000, {});
+  assert.equal(dueTomorrowCount(s), 1);
+});
+t('built-in sample drills are legal positions whose best move is legal', () => {
+  for (const d of SAMPLE_DRILLS) {
+    const c = new Chess(d.fen);
+    assert.ok(c.move({ from: d.bestUci.slice(0, 2), to: d.bestUci.slice(2, 4) }), d.id);
+    assert.equal(c.history()[0], d.bestSan);
+  }
 });
 console.log('\nall passed');

@@ -2,9 +2,10 @@
 import { Chess } from '../vendor/chess/chess.js';
 import { winPct, moveAccuracy, mean, round1 } from './score.js';
 import { classify, pvToSan } from './classify.js';
+import { MIN_PLIES } from './importer.js';
 
 const BOOK_PLIES = 8;        // opening moves are not judged
-const MISTAKE_WP = 10;       // percentage points of win chance lost
+export const MISTAKE_WP = 10;       // percentage points of win chance lost
 
 export async function analyzeGame(game, engine, { movetime = 70, onProgress } = {}) {
   const chess = new Chess();
@@ -18,7 +19,7 @@ export async function analyzeGame(game, engine, { movetime = 70, onProgress } = 
     fens.push(chess.fen());
   }
   const n = sans.length;
-  if (n < BOOK_PLIES + 4) return null;
+  if (n < MIN_PLIES) return null;   // same minimum the importer enforces
   const finalOver = chess.isGameOver();
   const finalMate = chess.isCheckmate();
 

@@ -14,7 +14,7 @@ export const PATTERNS = {
   },
   endgame: {
     id: 'endgame', name: 'Endgame technique',
-    blurb: 'Winning or equal endings that slipped after most pieces came off.',
+    blurb: 'Positions that slipped in an ending, after most pieces came off.',
     lesson: 'In endings, king activity and passed pawns matter more than anything. Ask where your king should go and which pawn can run. Do not rush, there is rarely a threat to react to.',
     idea: 'In an ending, bring the king in and look at the pawns. What is the most useful improving move?',
   },
@@ -26,15 +26,15 @@ export const PATTERNS = {
   },
   advantage: {
     id: 'advantage', name: 'Throwing away wins',
-    blurb: 'A winning position slipped away through a quiet move.',
+    blurb: 'A clearly better position slipped away.',
     lesson: 'When you are winning, trade pieces and remove counterplay instead of hunting for more. Before each move ask what your opponent wants, and take it away. Simple and safe wins the game.',
     idea: 'You are better here. Which move keeps everything safe and takes away their best idea?',
   },
   positional: {
     id: 'positional', name: 'Positional slips',
-    blurb: 'A quieter move was clearly better, with no immediate tactic involved.',
+    blurb: 'A clearly better move was available, though it did not win material by force.',
     lesson: 'Not every mistake loses a piece. Look for your worst-placed piece and improve it, and ask which pawn break or open file helps you most. Small improvements add up.',
-    idea: 'No tactic here. Which piece is worst placed, and where does it belong?',
+    idea: 'Which piece is worst placed, and where does it belong? A good exchange can improve it too.',
   },
   time: {
     id: 'time', name: 'Time trouble',

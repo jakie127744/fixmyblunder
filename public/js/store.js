@@ -4,7 +4,7 @@ const KEY = 'blunderprint.v1';
 const blank = () => ({
   v: 1,
   profile: null,               // { source, username, createdAt }
-  settings: { setSize: 5, engineMs: 70, gamesToImport: 25, theme: 'system', reminderTime: '', thinkSecs: 0 },
+  settings: { setSize: 5, engineMs: 70, gamesToImport: 25, theme: 'system', reminderTime: '', thinkSecs: 5 },  // thinkSecs: drills and puzzles only; Play keeps its own setting (settings.play.think)
   games: {},                   // id -> analysed game record (mistakes included)
   drills: {},                  // id -> drill (mistake + schedule)
   attempts: [],                // { t, id, ok, ms }
@@ -45,6 +45,17 @@ export function importJson(text) {
   const s = JSON.parse(text);
   if (!s || s.v !== 1 || typeof s.games !== 'object') throw new Error('That file is not a FixMyBlunder backup.');
   mem = { ...blank(), ...s, settings: { ...blank().settings, ...(s.settings || {}) } };
+  save();
+}
+
+/**
+ * Account switching wipes everything that belongs to the old account: games, drills, attempts, today's set,
+ * sync time, puzzle history and any game in progress. Settings stay because they belong to the device.
+ */
+export function clearAccountData() {
+  const s = state(), b = blank();
+  for (const k of ['profile', 'games', 'drills', 'attempts', 'today', 'lastSync']) s[k] = b[k];
+  for (const k of ['puzzleSeen', 'playGame', 'staleMistakes', 'classifier']) delete s[k];
   save();
 }
 

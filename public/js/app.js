@@ -1,10 +1,11 @@
 // FixMyBlunder app shell: onboarding, Today, Diagnose, Retry, Report, Settings.
-import { state, save, onChange, exportJson, importJson, reset } from './store.js';
+import { state, save, onChange, exportJson, importJson, reset, clearAccountData } from './store.js';
 import { Engine, workerTransport } from './engine.js';
 import { analyzeGame } from './analyze.js';
-import { fetchLichess, fetchChessCom, fromPgnText } from './importer.js';
+import { fetchLichess, fetchChessCom, fromPgnText, skipText, MIN_PLIES } from './importer.js';
+import { SAMPLE_DRILLS, sampleById } from './samples.js';
 import { PATTERNS, PATTERN_ORDER, pat } from './patterns.js';
-import { addDrillsFromGame, patternStats, buildToday, dueCount, todayResults, gradeDrill, streak, gamesByDate, isMastered, minutesTrained, extraDrills, puzzleStats } from './srs.js';
+import { addDrillsFromGame, patternStats, buildToday, dueCount, todayResults, gradeDrill, streak, gamesByDate, isMastered, minutesTrained, extraDrills, puzzleStats, dueTomorrowCount, deliberateStreak, isDeliberate } from './srs.js';
 import { nextPuzzle, countMatching, downloadAll, THEME_GROUPS, MIXED, DIFFICULTY, MOVE_COUNTS, PATTERN_THEME, themeName } from './puzzles.js';
 import { weekly, allTime, puzzleReport } from './report.js';
 import { winPct } from './score.js';
@@ -12,7 +13,7 @@ import { pvToSan, reclassify, CLASSIFIER_VERSION } from './classify.js';
 import { buildLesson } from './lessons.js';
 import { Board } from './board.js';
 import { Chess } from '../vendor/chess/chess.js';
-import { esc, plural, fmtDay, fmtRange, addDays, weekStart, DAY } from './util.js';
+import { esc, plural, fmtDay, fmtRange, addDays, weekStart, DAY, dayKey } from './util.js';
 import { logError, watchGlobalErrors, buildReport, mailtoLink, getErrors, clearErrors } from './diag.js';
 import { FEEDBACK_EMAIL, FEEDBACK_FORM_URL } from './config.js';
 import { reminderIcs, validTime } from './reminder.js';
@@ -25,7 +26,7 @@ const view = $('#view');
 const ui = {
   tab: 'today', report: 'week', weekOffset: 0, pzPeriod: 'week', pzSort: 'count', board: null, session: null, drill: null,
   onboard: { step: 'form', source: 'lichess', username: '', pgn: '', error: '', counts: { games: 0, mistakes: 0, drills: 0 }, live: '', progress: 0 },
-  syncing: false, review: null,
+  syncing: false, review: null, importNote: null,
   practice: { mode: 'games', pattern: 'all', n: 10, theme: 'mix', difficulty: 'any', moves: 'any' }, puzzle: null,
 };
 
@@ -113,6 +114,12 @@ const nameOf = (id) => PATTERNS[id].name;
 const setSize = () => state().settings.setSize;
 const sourceLabel = (s) => ({ lichess: 'Lichess', chesscom: 'Chess.com', pgn: 'PGN', play: 'Played here' }[s] || s);
 const accClass = (a) => (a >= 85 ? 'hi' : a < 65 ? 'lo' : '');
+const RESULT_WORD = { win: 'Won', loss: 'Lost', draw: 'Drew', unfinished: 'Unfinished' };
+/** The result exactly as recorded. Only a real draw is called "Drew"; a game with no result is "Unfinished". */
+const resultWord = (r) => RESULT_WORD[r] || 'Unfinished';
+const gameTitle = (g) => `${resultWord(g.result)} as ${g.color} vs ${g.opponent}`;
+/** Hint shown under "Show the idea first". The positional hint never claims there is no tactic. */
+const ideaText = (d) => pat(d.pattern).idea;
 const arrow = (v) => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v);
 
 function line(points, opts = {}) {
@@ -154,35 +161,67 @@ function setBg(text, frac) {
 }
 
 /* ------------------------------------------------------------------ sync */
+/** Why nothing could be imported, in words that name the real reason. */
+function explainNoGames(source, username, skipped, pasted) {
+  if (source === 'pgn' && !pasted) return 'No games found in that text. Each game needs its tag lines, starting with [Event "..."], then [White "..."] and [Black "..."].';
+  if (!skipped.length) return 'No standard games found for that account.';
+  const kinds = {};
+  for (const s of skipped) kinds[s.reason] = (kinds[s.reason] || 0) + 1;
+  const reasons = Object.keys(kinds);
+  const n = skipped.length;
+  if (reasons.length === 1) {
+    const r = reasons[0];
+    if (r === 'short') return n === 1 ? `${skipText(skipped[0])} Paste a longer game.` : `All ${n} games are too short to analyse: each needs at least ${MIN_PLIES} half-moves (${MIN_PLIES / 2} moves each).`;
+    if (r === 'name') return `"${username}" is not White or Black in ${n === 1 ? 'that game' : `any of those ${n} games`}. Check the name matches the PGN exactly.`;
+    if (r === 'variant') return `${n === 1 ? 'That game is' : 'Those games are'} not standard chess from the starting position.`;
+    return `${n === 1 ? 'That game' : 'Those games'} could not be read as PGN.`;
+  }
+  const label = { short: 'too short', name: 'name not found', variant: 'not standard chess', unreadable: 'unreadable' };
+  return `None of the ${n} games could be used: ${reasons.map((r) => `${kinds[r]} ${label[r]}`).join(', ')}.`;
+}
+
+/** "3 pasted, 2 analysed, 1 skipped" plus one line per skipped game. */
+function importSummary(r, source) {
+  const seen = r.pasted != null ? r.pasted : r.found + r.skipped.length;
+  const head = `${seen} ${source === 'pgn' ? 'pasted' : 'found'}, ${r.analysed} analysed${r.existing ? `, ${r.existing} already analysed` : ''}${r.skipped.length ? `, ${r.skipped.length} skipped` : ''}.`;
+  return { head, lines: r.skipped.map(skipText) };
+}
+
 async function sync({ count, pgn, onStatus }) {
   const s = state();
   const { source, username } = s.profile;
   onStatus({ phase: 'fetch' });
-  let games;
+  let games, skipped = [], pasted = null;
   if (source === 'lichess') games = await fetchLichess(username, count);
-  else if (source === 'chesscom') games = await fetchChessCom(username, count);
-  else games = fromPgnText(pgn || '', username);
-  if (!games.length) throw new Error(source === 'pgn' ? 'No usable games found. Check the username matches the White or Black name in the PGN.' : 'No standard games found for that account.');
+  else if (source === 'chesscom') { games = await fetchChessCom(username, count); skipped = games.skipped || []; }
+  else { const r = fromPgnText(pgn || '', username); games = r.games; skipped = r.skipped.slice(); pasted = r.pasted; }
+  if (!games.length) throw new Error(explainNoGames(source, username, skipped, pasted));
   for (const g of games) { const ex = s.games[g.id]; if (ex && !ex.sans) ex.sans = g.moves.slice(); }
   const fresh = games.filter((g) => !s.games[g.id]);
-  let mistakes = 0, drills = 0, done = 0;
+  let mistakes = 0, drills = 0, done = 0, analysed = 0;
   for (const g of fresh) {
     const rec = await analyzeGame(g, getEngine(), {
       movetime: s.settings.engineMs,
       onProgress: (i, n) => onStatus({ phase: 'analyse', game: done + 1, games: fresh.length, frac: i / n }),
     });
     done++;
-    if (!rec) { onStatus({ phase: 'analyse', game: done, games: fresh.length, frac: 1, skipped: true }); continue; }
+    if (!rec) {
+      skipped.push({ reason: 'short', label: `Game vs ${g.opponent}`, plies: g.moves.length });
+      onStatus({ phase: 'analyse', game: done, games: fresh.length, frac: 1, skipped: true });
+      continue;
+    }
+    analysed++;
     s.games[rec.id] = rec;
     drills += addDrillsFromGame(s, rec);
     mistakes += rec.mistakes.length;
     save();
     onStatus({ phase: 'game', game: done, games: fresh.length, rec, mistakes, drills });
   }
+  if (!analysed && !Object.keys(s.games).length) throw new Error(explainNoGames(source, username, skipped, pasted));
   s.lastSync = Date.now();
   if (!Object.keys(todayResults(s)).length) s.today = null; // rebuild today's set, unless drilling has started
   save();
-  return { total: games.length, analysed: fresh.length, mistakes, drills };
+  return { pasted, found: games.length, existing: games.length - fresh.length, analysed, skipped, mistakes, drills };
 }
 
 /** Analyse a game played in the Play tab with the normal pipeline, so its mistakes become drills. */
@@ -204,7 +243,7 @@ async function reviewPlayed(game) {
     return rec.id;
   } finally { setBg(null); }
 }
-const playHost = { ui, render: () => render(), toast, announce, state, save, logError, review: reviewPlayed, openReview: (id) => { ui.tab = 'diagnose'; history.replaceState(null, '', '#diagnose'); openReview(id); } };
+const playHost = { ui, render: () => render(), toast, announce, state, save, logError, review: reviewPlayed, evaluate: (fen, ms = 100) => getEngine().evaluate(fen, { movetime: ms }), openReview: (id) => { ui.tab = 'diagnose'; history.replaceState(null, '', '#diagnose'); openReview(id); } };
 
 /* ------------------------------------------------------------------ onboarding */
 function viewOnboard() {
@@ -228,7 +267,7 @@ function viewOnboard() {
         <input type="text" id="uname" value="${esc(o.username)}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${o.source === 'pgn' ? 'Name as it appears as White or Black' : 'e.g. your username'}">
         ${o.source === 'pgn' ? `<label class="fl" for="pgn">Games (PGN)</label><textarea id="pgn" placeholder="Paste one or more games">${esc(o.pgn)}</textarea>` : ''}
         ${o.error ? `<div class="err" role="alert">${esc(o.error)}${o.reportable ? ' <button class="link" data-act="feedback" style="color:inherit;padding:0 4px">Send a report</button>' : ''}</div>` : ''}
-        <button class="btn" style="margin-top:14px" data-act="start">Analyse my last ${state().settings.gamesToImport} games</button>
+        <button class="btn" style="margin-top:14px" data-act="start">${o.source === 'pgn' ? 'Analyse these games' : `Analyse my last ${state().settings.gamesToImport} games`}</button>
         <p class="small sub" style="margin-top:10px">Fewer than five games? That still works, but patterns are rough guesses until you have played more. Add games later from Settings and they sharpen.</p>
       </div>
     </section>`;
@@ -255,8 +294,11 @@ function viewOnboard() {
     <p class="sub">Ranked by how many win-chance points each one cost you. ${WCP_LINE.replace('Win-chance points: h', 'H')}</p>
     ${ps.games < 5 ? `<div class="card" style="margin-top:12px;background:var(--amber-soft);border-color:transparent"><p><b>Only ${plural(ps.games, 'game')} to go on.</b> These patterns are early guesses. Play more, then tap Sync games in Settings and they will sharpen.</p></div>` : ''}
     ${ui.syncing && o.early ? `<div class="card" style="margin-top:12px;background:var(--amber-soft);border-color:transparent"><p><b>Still analysing.</b> ${esc(o.live || '')} These numbers will keep updating.</p></div>` : ''}
-    <div class="stack reveal">${ps.list.filter((p) => p.count).slice(0, 3).map((p, i) => patCard(p, max, i + 1, false)).join('') || '<div class="card"><p>No clear mistakes found in these games. Import more games to find patterns.</p></div>'}</div>
-    <button class="btn" style="margin-top:18px" data-act="finish-onboard">See today's set</button>
+    ${importNoteHtml()}
+    <div class="stack reveal">${ps.list.filter((p) => p.count).slice(0, 3).map((p, i) => patCard(p, max, i + 1, false)).join('') || '<div class="card"><p>No clear mistakes found in these games, so there is nothing to drill from them yet. Try a few sample positions now, and add more games later to find patterns.</p></div>'}</div>
+    ${Object.keys(state().drills).length
+      ? '<button class="btn" style="margin-top:18px" data-act="finish-onboard">See today\'s set</button>'
+      : '<button class="btn" style="margin-top:18px" data-act="start-sample">Try a sample set</button><button class="btn ghost" style="margin-top:8px" data-act="finish-onboard">Go to Today</button>'}
   </section>`;
 }
 
@@ -267,12 +309,15 @@ async function runOnboard() {
   if (!o.username) { o.error = 'Enter your username first.'; render(); return; }
   if (o.source === 'pgn' && !o.pgn.trim()) { o.error = 'Paste at least one game.'; render(); return; }
   const s = state();
+  // Data left behind by an earlier account must never be counted for this one.
+  if (!s.profile && Object.keys(s.games).length) clearAccountData();
   s.profile = { source: o.source, username: o.username, createdAt: Date.now() };
   o.step = 'analyse'; o.error = ''; o.reportable = false; o.counts = { games: 0, mistakes: 0, drills: 0 }; o.live = 'Fetching your games'; o.progress = 0.02; o.early = false; o.canStart = false;
   ui.syncing = true;
   render();
+  ui.importNote = null;
   try {
-    await sync({
+    const result = await sync({
       count: s.settings.gamesToImport, pgn: o.pgn,
       onStatus: (st) => {
         if (st.phase === 'fetch') o.live = `Fetching your ${sourceLabel(o.source)} games`;
@@ -297,6 +342,8 @@ async function runOnboard() {
       },
     });
     ui.syncing = false;
+    const sum = importSummary(result, o.source);
+    ui.importNote = result.skipped.length || o.source === 'pgn' ? sum : null;
     if (o.early) {
       setBg(null);
       if (o.step === 'reveal' || ['today', 'diagnose', 'report'].includes(ui.tab)) render();
@@ -313,6 +360,12 @@ async function runOnboard() {
     o.error = e.message || 'Something went wrong. Try again.';
   }
   render();
+}
+
+function importNoteHtml() {
+  const n = ui.importNote;
+  if (!n) return '';
+  return `<div class="card" style="margin-top:12px;background:var(--amber-soft);border-color:transparent" role="status"><p><b>${esc(n.head)}</b></p>${n.lines.map((l) => `<p class="small" style="margin-top:4px">${esc(l)}</p>`).join('')}<button class="link" data-act="dismiss-note" style="padding:0;min-height:0;margin-top:6px">Dismiss</button></div>`;
 }
 
 /* ------------------------------------------------------------------ Today */
@@ -337,9 +390,11 @@ function viewToday() {
   const st = streak(s);
   const ps = patternStats(s);
   const focus = ps.list[0] && ps.list[0].count ? ps.list[0] : null;
-  const due = dueCount(s);
+  const due = dueCount(s), tomorrow = dueTomorrowCount(s), ds = deliberateStreak(s);
   if (!ids.length) {
-    return `<section class="view"><h1 class="h1">Nothing to drill yet</h1><p class="sub">No mistakes were found to turn into drills. Import more games and they will appear here.</p><div class="stack"><button class="btn" data-act="sync">Import more games</button></div></section>`;
+    const isPgn = s.profile && s.profile.source === 'pgn';
+    return `<section class="view"><h1 class="h1">Nothing to drill from your games yet</h1><p class="sub">No mistakes were found to turn into drills. You can still train now with a few sample positions, or add more games and drills will appear here.</p>
+      <div class="stack"><button class="btn" data-act="start-sample">Try a sample set</button><button class="btn ghost" data-act="tab" data-v="puzzles">Practise themed puzzles</button><button class="btn ghost" data-act="sync">${isPgn ? 'Add games from PGN' : 'Import more games'}</button></div></section>`;
   }
   const allDone = doneN === ids.length;
   const mins = Math.max(1, Math.round((ids.length - doneN) * 1.5));
@@ -357,12 +412,13 @@ function viewToday() {
         ${ids.map((id, i) => { const d = s.drills[id]; const r = res[id]; return `<button class="drill" data-act="open-drill" data-id="${esc(id)}"><span class="num ${r ? (r.ok ? 'done' : 'miss') : ''}">${r ? (r.ok ? '✓' : '×') : i + 1}</span><span><b>${esc(nameOf(d.pattern))}</b><small>${d.box == null ? 'New, from your games' : 'Review'} · move ${Math.ceil(d.ply / 2 + 0.5)}</small></span><span class="tag ${r ? (r.ok ? 'good' : 'bad') : ''}">${r ? (r.ok ? 'Solved' : 'Missed') : 'Start'}</span></button>`; }).join('')}
       </section>
       ${focus ? `<section class="card lesson"><div class="row"><div><p class="eyebrow">Micro-lesson · 90 sec</p><h3 class="h2" style="margin-top:2px">${esc(nameOf(focus.id))}</h3></div><button class="btn ghost sm" data-act="lesson" aria-expanded="false">Read</button></div><p id="lessonBody" class="hide">${esc(PATTERNS[focus.id].lesson)}</p></section>` : ''}
-      <section class="card"><div class="row"><h2 class="h2">Your week</h2><span class="tag">${st.current ? `${st.current}-day streak` : 'No streak yet'}</span></div>
+      <section class="card"><div class="row"><h2 class="h2">Your week</h2><span class="row" style="gap:6px"><span class="tag">${st.current ? `${st.current}-day streak` : 'No streak yet'}</span><span class="tag" title="Drills solved first try, with no hint, after thinking">${ds.current} deliberate</span></span></div>
         <div class="week" style="margin-top:12px">${st.week.map((d) => `<div class="${d.done ? 'on' : ''} ${d.today ? 'today' : ''}"><i>${d.done ? '✓' : ''}</i>${['M', 'T', 'W', 'T', 'F', 'S', 'S'][(new Date(d.ts).getDay() + 6) % 7]}</div>`).join('')}</div>
         <p class="small sub" style="margin-top:12px">Finish at least ${Math.min(3, setSize())} drills to count the day. One rest day a week will not break your streak.</p>
+        <p class="small sub" style="margin-top:6px">Deliberate streak: drills solved first try, with no hint, after at least ${MIN_THINK_SECS} seconds of thinking. Taking longer never hurts it.</p>
       </section>
       <div class="row" style="gap:12px">
-        <section class="card" style="flex:1"><div class="big">${due}</div><p class="sub small" style="margin-top:6px">positions due for review</p></section>
+        <section class="card" style="flex:1"><div class="big">${due}</div><p class="sub small" style="margin-top:6px">positions due for review today</p><p class="sub small">${tomorrow} due tomorrow</p></section>
         <section class="card" style="flex:1"><div class="big">${minutesTrained(s, weekStart(Date.now()))}</div><p class="sub small" style="margin-top:6px">minutes trained this week</p></section>
       </div>
     </div>
@@ -382,11 +438,12 @@ function viewDiagnose() {
     <h1 class="h1">Your last ${plural(ps.games, 'game')}</h1>
     <p class="sub">The patterns that cost you the most win chance. Words are templates over engine facts, never guesses.</p>
     <div class="stack">
-      <button class="btn ghost" data-act="sync" ${ui.syncing ? 'disabled' : ''}>${ui.syncing ? 'Analysing…' : 'Import new games'}</button>
+      <button class="btn ghost" data-act="sync" ${ui.syncing ? 'disabled' : ''}>${ui.syncing ? 'Analysing…' : s.profile.source === 'pgn' ? 'Add games from PGN' : 'Import new games'}</button>
+      ${importNoteHtml()}
       ${s.staleMistakes ? `<div class="card" style="background:var(--amber-soft);border-color:transparent"><p><b>${plural(s.staleMistakes, 'older mistake')}</b> use the previous labels. Delete your data in Settings and import again to refresh them.</p></div>` : ''}
       ${withData.length ? withData.map((p, i) => patCard(p, max, i + 1)).join('') : '<div class="card"><p>No mistakes found. Great games, or import more.</p></div>'}
       <section class="card"><h2 class="h2">Recent games</h2><p class="sub small" style="margin:2px 0 6px">Tap a game to step through its biggest mistakes.</p>
-        ${games.map((g) => `<div class="game" data-act="review" data-id="${esc(g.id)}" role="button" tabindex="0"><span class="acc ${accClass(g.accuracy)}" title="Accuracy">${Math.round(g.accuracy)}</span><span><b>${g.result === 'win' ? 'Won' : g.result === 'loss' ? 'Lost' : 'Drew'}</b> as ${g.color} vs ${esc(g.opponent)}<small>${fmtDay(g.date)}${g.speed ? ' · ' + esc(g.speed) : ''} · ${plural(g.mistakes.length, 'mistake')}</small></span><span class="small sub" aria-hidden="true">Review ›</span></div>`).join('') || '<p class="sub">No games yet.</p>'}
+        ${games.map((g) => `<div class="game" data-act="review" data-id="${esc(g.id)}" role="button" tabindex="0" aria-label="${esc(`${gameTitle(g)}, accuracy ${Math.round(g.accuracy)}, ${fmtDay(g.date)}, ${plural(g.mistakes.length, 'mistake')}. Review`)}"><span class="acc ${accClass(g.accuracy)}" title="Accuracy">${Math.round(g.accuracy)}</span><span><b>${resultWord(g.result)}</b> as ${g.color} vs ${esc(g.opponent)}<small>${fmtDay(g.date)}${g.speed ? ' · ' + esc(g.speed) : ''} · ${plural(g.mistakes.length, 'mistake')}</small></span><span class="small sub" aria-hidden="true">Review ›</span></div>`).join('') || '<p class="sub">No games yet.</p>'}
       </section>
     </div>
   </section>`;
@@ -402,6 +459,12 @@ function seePattern(id) {
 }
 
 /* ------------------------------------------------------------------ Retry */
+function startSample() {
+  ui.onboard.step = 'form';
+  startSession(SAMPLE_DRILLS.map((d) => d.id), 'Sample set');
+  ui.session.sample = true;
+}
+
 function startSession(ids, label) {
   const s = state();
   const res = todayResults(s);
@@ -410,13 +473,13 @@ function startSession(ids, label) {
   list.sort((a, b) => (res[a] ? 1 : 0) - (res[b] ? 1 : 0));
   ui.session = { ids: list, idx: 0, label, results: {} };
   ui.drill = null;
-  nav('retry');
+  nav('drills');
 }
 
 function currentDrill() {
   const s = state(), se = ui.session;
   if (!se) return null;
-  return s.drills[se.ids[se.idx]] || null;
+  return s.drills[se.ids[se.idx]] || sampleById(se.ids[se.idx]) || null;
 }
 
 function viewRetry() {
@@ -451,11 +514,11 @@ function fbHtml() {
   const head = dr.ok ? (dr.exact ? 'Best move' : 'A good move') : 'That gives up too much';
   const body = dr.ok
     ? (dr.exact ? `${esc(d.bestSan)} is what the engine plays.` : `${esc(dr.san)} keeps the position healthy. The engine’s first choice was ${esc(d.bestSan)}.`)
-    : `${esc(dr.san)} drops about ${Math.round(dr.drop)}% win chance.`;
+    : `${esc(dr.san)} drops about ${Math.round(dr.drop)}% win chance.${dr.fast ? ` Played in ${Math.max(1, Math.round(dr.secs))}s. Look at checks, captures and threats first.` : ''}`;
   h += `<div class="fb ${dr.ok ? 'good' : 'bad'}" role="status"><b>${head}</b><p>${body}</p><p style="margin-top:8px">${esc(d.explain)}</p>
-    <p class="small sub" style="margin-top:8px">${dr.ok ? 'It comes back for review on a spaced schedule.' : 'It returns tomorrow so you can try again.'}</p></div>
+    <p class="small sub" style="margin-top:8px">${d.sample ? 'This is a built-in sample, so it is not saved to your reports.' : dr.ok ? 'It comes back for review on a spaced schedule.' : 'It returns tomorrow so you can try again.'}${dr.deliberate ? ' Counted toward your deliberate streak.' : ''}</p></div>
     ${lessonSection(dr.lesson, dr, 'lesson card')}
-    <details class="eng"><summary>What the coach sees</summary><p>In your game you played <span class="mono">${esc(d.playedSan)}</span>. Engine line: <span class="mono">${esc(line)}</span>.</p><p>Evaluation for you: ${evalTxt(d.bestCp, d.bestMate)} with the best move, ${evalTxt(d.cpAfter)} after ${esc(d.playedSan)}. Checked on this device with Stockfish.</p></details>`;
+    <details class="eng"><summary>What the coach sees</summary><p>In your game you played <span class="mono">${esc(d.playedSan)}</span>. Engine line: <span class="mono">${esc(line)}</span>.</p><p>Evaluation for you: ${evalTxt(d.bestCp, d.bestMate)} with the best move, ${evalTxt(d.cpAfter)} after ${esc(d.playedSan)}. ${d.sample ? 'Approximate, for this built-in sample.' : 'Checked on this device with Stockfish.'}</p></details>`;
   return h;
 }
 
@@ -488,6 +551,8 @@ function applyThink(owner) {
   };
   draw(); thinkTimer = setInterval(draw, 250);
 }
+const FAST_DRILL_SECS = 3;      // a wrong move this quick, with Think first off, is named as rushed
+const MIN_THINK_SECS = 5;       // matches MIN_THINK_MS in srs.js
 const THINK_OPTS = [[0, 'Off'], [5, '5 sec'], [15, '15 sec'], [30, '30 sec'], [60, '1 min']];
 const thinkBox = '<div id="think" class="think" role="status" hidden></div>';
 
@@ -510,6 +575,7 @@ async function answer(uci, san) {
   const d = currentDrill(), dr = ui.drill;
   if (!d || dr.phase !== 'ask') return;
   dr.playedUci = uci; dr.san = san; dr.phase = 'checking';
+  dr.secs = (Date.now() - dr.start) / 1000;   // seconds from the position appearing (or the last retry) to this move
   ui.board.play(uci); ui.board.setEnabled(false);
   rerenderDrillPanel();
   let ok, exact = uci === d.bestUci, drop = 0, ev = null;
@@ -525,11 +591,15 @@ async function answer(uci, san) {
   }
   if (ui.drill !== dr) return;
   dr.ok = ok; dr.exact = exact; dr.drop = drop; dr.phase = 'done';
+  // A wrong move played within 3 seconds, with Think first off, gets the speed named in its feedback.
+  dr.fast = !ok && dr.secs < FAST_DRILL_SECS && !(state().settings.thinkSecs > 0);
   ui.board.mark(uci.slice(2, 4), ok ? 'good' : 'bad');
   if (!dr.graded) {
     dr.graded = true;
     const s = state();
-    gradeDrill(s, d.id, ok, Date.now() - dr.start);
+    const meta = { hint: !!dr.hint, retried: !!dr.retried };
+    dr.deliberate = !d.sample && isDeliberate(ok, Date.now() - dr.start, meta);   // samples are never saved, so never counted
+    gradeDrill(s, d.id, ok, Date.now() - dr.start, meta);
     ui.session.results[d.id] = { ok };
     save();
   }
@@ -582,10 +652,13 @@ function viewHub() {
     const counts = Object.fromEntries(PATTERN_ORDER.map((p) => [p, extraDrills(s, 9999, p).length]));
     const avail = pr.pattern === 'all' ? total : counts[pr.pattern];
     const n = Math.min(pr.n, avail);
-    return `<section class="view"><p class="eyebrow">Practice</p><h1 class="h1">Do more, your way</h1>${modeBar}
-      <p class="sub" style="margin-top:12px">Positions from your own games. ${left.length ? `${plural(left.length, 'drill')} left in today’s set.` : 'Today’s set is done, so everything here is extra.'}</p>
+    const dueNow = dueCount(s), dueTom = dueTomorrowCount(s), noDrills = !Object.keys(s.drills).length;
+    const setLine = !t.ids.length ? 'No drills from your games yet.' : left.length ? `${plural(left.length, 'drill')} left in today’s set.` : 'Today’s set is done, so everything here is extra.';
+    return `<section class="view"><p class="eyebrow">Drills</p><h1 class="h1">Do more, your way</h1>${modeBar}
+      <p class="sub" style="margin-top:12px">Positions from your own games. ${setLine}</p>
       <div class="stack" style="margin-top:12px">
         ${left.length ? '<button class="btn" data-act="start-set">Continue today’s set</button>' : ''}
+        ${noDrills ? '<section class="card"><h2 class="h2">Nothing to drill from your games yet</h2><p class="sub small" style="margin:4px 0 10px">Try a few sample positions now, or practise themed puzzles.</p><button class="btn" data-act="start-sample">Try a sample set</button><button class="btn ghost" style="margin-top:8px" data-act="mode" data-v="puzzles">Practise themed puzzles</button></section>' : `<section class="card"><h2 class="h2">Reviews</h2><p class="sub small" style="margin:4px 0 10px">${plural(dueNow, 'position')} due today, ${dueTom} due tomorrow. Missed drills come back the next day.</p>${dueNow ? `<button class="btn" data-act="practice-due">Review ${plural(dueNow, 'due position')}</button>` : ''}</section>`}
         <section class="card"><h2 class="h2">Pick a mistake type</h2><p class="sub small" style="margin:4px 0 10px">Reviews that are due come first. Numbers show drills available.</p>
           <div class="chips" role="group" aria-label="Mistake type">${chip('pp', 'all', `All types · ${total}`, pr.pattern === 'all', !total)}${PATTERN_ORDER.map((p) => chip('pp', p, `${esc(nameOf(p))} · ${counts[p]}`, pr.pattern === p, !counts[p])).join('')}</div>
           <p class="group-title" style="margin-top:16px">How many</p>
@@ -617,9 +690,10 @@ function viewHub() {
 }
 
 /** First visit: fetch all puzzle sets once (about 0.3 MB compressed) so they work offline. */
+let pzShown = 0;  // highest count shown so far, so the counter only ever goes up
 function ensurePuzzlesSaved() {
   const el = () => $('#pzDl');
-  downloadAll((d, n) => { if (el()) el().textContent = `Saving puzzles for offline use… ${d} of ${n}`; })
+  downloadAll((d, n) => { pzShown = Math.max(pzShown, d); if (el()) el().textContent = `Saving puzzle sets for offline use… ${pzShown} of ${n}`; })
     .then(() => { if (el()) el().textContent = 'Saved on this device for offline use.'; })
     .catch(() => { if (el()) el().textContent = 'Could not save puzzles for offline use. Connect and reopen this tab to retry.'; });
 }
@@ -736,8 +810,8 @@ function viewSummary() {
     <h1 class="h1">${got === ids.length ? 'Clean sweep' : 'Set complete'}</h1>
     <div class="stack">
       <div class="tiles"><div class="card tile"><div class="big up">${got}/${ids.length}</div><p class="k">solved first try</p></div><div class="card tile"><div class="big">${st.current || 0}</div><p class="k">day streak</p></div></div>
-      <section class="card"><p class="story">${got === ids.length ? 'Every position solved. These come back later on a spaced schedule.' : 'The ones you missed return tomorrow. That is how they stick.'}</p></section>
-      <button class="btn" data-act="tab" data-v="report">See your report</button>
+      <section class="card"><p class="story">${se.sample ? 'Sample positions are not saved to your reports. Add more games and drills from your own mistakes will appear on Today.' : got === ids.length ? 'Every position solved. These come back later on a spaced schedule.' : 'The ones you missed return tomorrow, and Today shows them as due tomorrow. That is how they stick.'}</p></section>
+      ${se.sample ? '<button class="btn" data-act="tab" data-v="puzzles">Practise themed puzzles</button>' : '<button class="btn" data-act="tab" data-v="report">See your report</button>'}
       <button class="btn ghost" data-act="tab" data-v="today">Back to Today</button>
     </div></section>`;
 }
@@ -786,23 +860,25 @@ function puzzleBody(p) {
     </section>`;
 }
 
+const scopeLine = (t) => `<br><span class="scope">${esc(t)}</span>`;
+
 function weekBody(w) {
   if (!w.hasData) return '<div class="card"><p class="story">No games or drills this week yet.</p><p class="sub small" style="margin-top:6px">Play a few games, import them, then finish today’s set.</p></div>';
   const topName = nameOf(w.topPattern), focus = nameOf(w.focus);
   const story = [
     w.games ? `You analysed ${plural(w.games, 'game')}${w.acc != null ? ` at ${w.acc}% accuracy${w.delta != null ? (w.delta >= 0 ? `, up ${w.delta}` : `, down ${Math.abs(w.delta)}`) + ' on the week before' : ''}` : ''}.` : 'No new games this week.',
     w.drillsTried ? `You trained on ${plural(w.daysTrained, 'day')} and solved ${w.drillsPassed} of ${w.drillsTried} drills.` : 'No drills this week yet.',
-    `${topName} cost you the most${w.improving ? ' and is improving' : ''}. Next focus: ${focus.toLowerCase()}.`,
+    `${topName} cost you the most (${w.scope.toLowerCase()})${w.improving ? ' and is improving' : ''}. Next focus: ${focus.toLowerCase()} (${w.focusScope.toLowerCase()}).`,
   ].join(' ');
   const pts = w.trend.map((t) => ({ v: t.acc }));
   return `<p class="story">${esc(story)}</p>
     <div class="tiles">
-      <div class="card tile"><div class="big ${w.delta == null ? '' : w.delta >= 0 ? 'up' : 'down'}">${w.delta == null ? (w.acc != null ? w.acc + '%' : '–') : arrow(w.delta) + ' pts'}</div><p class="k">${w.delta == null ? 'accuracy this week' : 'accuracy vs last week'}</p></div>
-      <div class="card tile"><div class="big">${w.minutes} min</div><p class="k">trained across ${plural(w.daysTrained, 'day')}</p></div>
-      <div class="card tile"><div class="big" style="font-size:21px;line-height:1.15">${esc(topName)}</div><p class="k">top pattern${w.improving ? ', improving' : ''}</p></div>
-      <div class="card tile"><div class="big" style="font-size:21px;line-height:1.15">${esc(focus)}</div><p class="k">next week’s focus</p></div>
+      <div class="card tile"><div class="big ${w.delta == null ? '' : w.delta >= 0 ? 'up' : 'down'}">${w.delta == null ? (w.acc != null ? w.acc + '%' : '–') : arrow(w.delta) + ' pts'}</div><p class="k">${w.delta == null ? 'accuracy this week' : 'accuracy vs last week'}${scopeLine(w.scope)}</p></div>
+      <div class="card tile"><div class="big">${w.minutes} min</div><p class="k">trained across ${plural(w.daysTrained, 'day')}${scopeLine('This week')}</p></div>
+      <div class="card tile"><div class="big" style="font-size:21px;line-height:1.15">${esc(topName)}</div><p class="k">top pattern${w.improving ? ', improving' : ''}${scopeLine(w.scope)}</p></div>
+      <div class="card tile"><div class="big" style="font-size:21px;line-height:1.15">${esc(focus)}</div><p class="k">next week’s focus${scopeLine(w.focusScope)}</p></div>
     </div>
-    <section class="card chart"><h2 class="h2" style="margin-bottom:8px">Accuracy, last 6 weeks</h2>${line(pts, { labels: [[0, fmtDay(w.trend[0].ts)], [5, w.isCurrent ? 'Now' : fmtDay(w.trend[5].ts)]], alt: 'Weekly accuracy for the last six weeks' })}</section>
+    <section class="card chart"><h2 class="h2" style="margin-bottom:8px">Accuracy, last 6 weeks</h2><p class="scope">Weekly averages, all analysed games</p>${line(pts, { labels: [[0, fmtDay(w.trend[0].ts)], [5, w.isCurrent ? 'Now' : fmtDay(w.trend[5].ts)]], alt: 'Weekly accuracy for the last six weeks' })}</section>
     <button class="btn" data-act="share">Share my report</button>`;
 }
 
@@ -817,24 +893,25 @@ function allBody(a) {
   const idx = (f) => Math.min(pts.length - 1, Math.round((pts.length - 1) * f));
   return `${note}<p class="story">${esc(story)}</p>
     <div class="tiles">
-      <div class="card tile"><div class="big ${a.accDelta == null ? '' : a.accDelta >= 0 ? 'up' : 'down'}">${a.enough && a.accDelta != null ? arrow(a.accDelta) + ' pts' : a.lAcc + '%'}</div><p class="k">${a.enough && a.accDelta != null ? `accuracy, ${a.eAcc}% to ${a.lAcc}%` : 'baseline accuracy'}</p></div>
-      <div class="card tile"><div class="big">${a.games}</div><p class="k">games analysed</p></div>
-      <div class="card tile"><div class="big">${a.solved}</div><p class="k">drills solved</p></div>
-      <div class="card tile"><div class="big">${a.mastered}</div><p class="k">mistakes mastered</p></div>
-      <div class="card tile"><div class="big">${a.puzzlesSolved}</div><p class="k">Lichess puzzles solved</p></div>
-      <div class="card tile"><div class="big">${a.minutes >= 60 ? (a.minutes / 60).toFixed(1) + ' h' : a.minutes + ' min'}</div><p class="k">time trained</p></div>
-      <div class="card tile"><div class="big">${a.streak.longest} ${a.streak.longest === 1 ? 'day' : 'days'}</div><p class="k">longest streak</p></div>
+      <div class="card tile"><div class="big ${a.accDelta == null ? '' : a.accDelta >= 0 ? 'up' : 'down'}">${a.enough && a.accDelta != null ? arrow(a.accDelta) + ' pts' : a.lAcc + '%'}</div><p class="k">${a.enough && a.accDelta != null ? `accuracy, ${a.eAcc}% to ${a.lAcc}%` : 'baseline accuracy'}${scopeLine(a.scope)}</p></div>
+      <div class="card tile"><div class="big">${a.games}</div><p class="k">games analysed${scopeLine('All time')}</p></div>
+      <div class="card tile"><div class="big">${a.solved}</div><p class="k">drills solved${scopeLine('All time')}</p></div>
+      <div class="card tile"><div class="big">${a.mastered}</div><p class="k">mistakes mastered${scopeLine('All time')}</p></div>
+      <div class="card tile"><div class="big">${a.puzzlesSolved}</div><p class="k">puzzles solved${scopeLine('All time')}</p></div>
+      <div class="card tile"><div class="big">${a.minutes >= 60 ? (a.minutes / 60).toFixed(1) + ' h' : a.minutes + ' min'}</div><p class="k">time trained${scopeLine('All time')}</p></div>
+      <div class="card tile"><div class="big">${a.streak.longest} ${a.streak.longest === 1 ? 'day' : 'days'}</div><p class="k">longest streak${scopeLine('All time')}</p></div>
     </div>
-    <section class="card chart"><h2 class="h2" style="margin-bottom:8px">Accuracy since you started</h2>${line(pts, { labels: pts.length > 1 ? [[0, fmtDay(a.weeks[0].ts)], [pts.length - 1, 'Now']] : [], marker: a.markerIdx, alt: 'Weekly accuracy since the first analysed game' })}<p class="sub small" style="margin-top:6px">Each dot is one week: the average accuracy of the games you played that week (higher is better). A dashed line joins weeks with a gap in between because you played no games then.${a.markerIdx >= 0 ? ' The dashed line marks when you started training.' : ''}</p></section>
-    ${a.patterns.length ? `<section class="card"><h2 class="h2">Mistakes per 25 games</h2><p class="sub small" style="margin-bottom:6px">${a.enough ? `Your ${a.slice} games before training against your latest ${a.slice}.` : 'Your starting point. This compares properly once you have new games after training.'}</p>${a.patterns.map((p) => pairHtml(p, a)).join('')}</section>` : ''}
-    <section class="card"><h2 class="h2" style="margin-bottom:6px">Milestones</h2>${a.milestones.map((m) => `<div class="mile"><time>${fmtDay(m.ts)}</time><span>${esc(m.text)}</span></div>`).join('')}</section>`;
+    <section class="card chart"><h2 class="h2" style="margin-bottom:8px">Accuracy since you started</h2><p class="scope">${esc(a.scope)}</p>${line(pts, { labels: pts.length > 1 ? [[0, fmtDay(a.weeks[0].ts)], [pts.length - 1, 'Now']] : [], marker: a.markerIdx, alt: 'Weekly accuracy since the first analysed game' })}<p class="sub small" style="margin-top:6px">Each dot is one week: the average accuracy of the games you played that week (higher is better). A dashed line joins weeks with a gap in between because you played no games then.${a.markerIdx >= 0 ? ' The dashed line marks when you started training.' : ''}</p></section>
+    ${a.patterns.length ? `<section class="card"><h2 class="h2">Mistakes per 25 games</h2><p class="scope">${esc(a.scope)}${a.enough ? '' : `, counting the latest ${plural(a.lateGames, 'game')}`}</p><p class="sub small" style="margin-bottom:6px">${a.enough ? `Your ${a.slice} games before training against your latest ${a.slice}.` : 'Your starting point. This compares properly once you have new games after training.'} Per 25 games = mistakes ÷ games counted × 25${a.lateGames === 25 ? ', so with 25 games these are the exact counts on Diagnose' : ''}. Costs are win-chance points per game, as on Diagnose.</p>${a.patterns.map((p) => pairHtml(p, a)).join('')}</section>` : ''}
+    <section class="card"><h2 class="h2" style="margin-bottom:6px">Milestones</h2><p class="scope">All time</p>${a.milestones.map((m) => `<div class="mile"><time>${fmtDay(m.ts)}</time><span>${esc(m.text)}</span></div>`).join('')}</section>`;
 }
 
 function pairHtml(p, a) {
   const max = Math.max(5, ...a.patterns.flatMap((x) => [x.then, x.now]));
   const change = p.then ? Math.round(((p.then - p.now) / p.then) * 100) : 0;
   return `<div class="pair"><b>${esc(nameOf(p.id))}</b><span class="delta ${a.enough ? (change > 0 ? 'up' : change < 0 ? 'down' : '') : ''}">${a.enough ? (change > 0 ? '−' + change + '%' : change < 0 ? '+' + Math.abs(change) + '%' : 'no change') : ''}</span>
-    <div class="bars">${a.enough ? `<span>Before</span><div class="bar then"><i style="width:${(p.then / max) * 100}%"></i></div><span>${p.then}</span><span>Since</span>` : '<span>Start</span>'}<div class="bar"><i style="width:${(p.now / max) * 100}%"></i></div><span>${p.now}</span></div></div>`;
+    <div class="bars">${a.enough ? `<span>Before</span><div class="bar then"><i style="width:${(p.then / max) * 100}%"></i></div><span>${p.then}</span><span>Since</span>` : '<span>Start</span>'}<div class="bar"><i style="width:${(p.now / max) * 100}%"></i></div><span>${p.now}</span></div>
+    <small class="sub">${plural(p.nowCount, 'mistake')} in ${plural(a.lateGames, 'game')}, about ${p.nowCost} win-chance points a game</small></div>`;
 }
 
 async function shareReport() {
@@ -879,10 +956,10 @@ function openSettings() {
   const s = state(), p = s.profile, st = s.settings;
   openSheet(`<h2 class="h2">Settings</h2>
     ${p ? `<div class="settings-row"><b>${esc(sourceLabel(p.source))}: ${esc(p.username)}</b><span class="sub small">${plural(Object.keys(s.games).length, 'game')} analysed${s.lastSync ? `, last sync ${fmtDay(s.lastSync)}` : ''}</span>
-      <div class="row" style="gap:8px;margin-top:6px"><button class="btn sm" data-act="sync-from-settings">Sync games</button><button class="btn sm ghost" data-act="switch">Change account</button></div></div>` : ''}
+      <div class="row" style="gap:8px;margin-top:6px"><button class="btn sm" data-act="sync-from-settings">${p.source === 'pgn' ? 'Add games from PGN' : 'Sync games'}</button><button class="btn sm ghost" data-act="switch">Change account</button></div></div>` : ''}
     ${installRow()}
     <div class="settings-row"><label for="setSize"><b>Drills per day</b></label><select id="setSize" data-set="setSize">${[3, 5, 8, 10, 15].map((n) => `<option value="${n}" ${st.setSize === n ? 'selected' : ''}>${n} drills, about ${Math.round(n * 1.5)} min</option>`).join('')}</select></div>
-    <div class="settings-row"><label for="thinkSecs"><b>Think first</b></label><select id="thinkSecs" data-set="thinkSecs">${[[0, 'Off'], [5, '5 seconds'], [15, '15 seconds'], [30, '30 seconds'], [60, '1 minute']].map(([n, l]) => `<option value="${n}" ${(st.thinkSecs || 0) === n ? 'selected' : ''}>${l}</option>`).join('')}</select><span class="sub small">Locks the board in drills and puzzles until the time is up, so you look before you move. Many blunders come from moving too fast.</span></div>
+    <div class="settings-row"><label for="thinkSecs"><b>Think first: drills and puzzles</b></label><select id="thinkSecs" data-set="thinkSecs">${[[0, 'Off'], [5, '5 seconds'], [15, '15 seconds'], [30, '30 seconds'], [60, '1 minute']].map(([n, l]) => `<option value="${n}" ${(st.thinkSecs || 0) === n ? 'selected' : ''}>${l}</option>`).join('')}</select><span class="sub small">Locks the board in drills and puzzles until the time is up, so you look before you move. Many blunders come from moving too fast. Games in Play have their own Think first setting on the Play screen.</span></div>
     <div class="settings-row"><label for="gamesN"><b>Games per sync</b></label><select id="gamesN" data-set="gamesToImport">${[25, 50, 100].map((n) => `<option value="${n}" ${st.gamesToImport === n ? 'selected' : ''}>Latest ${n}</option>`).join('')}</select></div>
     <div class="settings-row"><label for="eng"><b>Analysis depth</b></label><select id="eng" data-set="engineMs"><option value="40" ${st.engineMs === 40 ? 'selected' : ''}>Fast</option><option value="70" ${st.engineMs === 70 ? 'selected' : ''}>Balanced</option><option value="150" ${st.engineMs === 150 ? 'selected' : ''}>Thorough, slower</option></select><span class="sub small">Applies to games you import from now on.</span></div>
     <div class="settings-row"><label for="theme"><b>Theme</b></label><select id="theme" data-set="theme">${['system', 'light', 'dark'].map((t) => `<option value="${t}" ${st.theme === t ? 'selected' : ''}>${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}</select></div>
@@ -934,15 +1011,40 @@ function applyTheme() {
   if (t === 'system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', t);
 }
 
-async function manualSync(count) {
+function openPgnImport(err = '') {
+  const p = state().profile;
+  openSheet(`<h2 class="h2">Add games from PGN</h2>
+    <p class="sub small" style="margin:4px 0 10px">Paste one or more games where ${esc(p.username)} is White or Black. Games you have already analysed are skipped.</p>
+    <label class="fl" for="pgnNew">Games (PGN)</label>
+    <textarea id="pgnNew" placeholder="Paste one or more games">${esc(ui.onboard.pgn)}</textarea>
+    ${err ? `<div class="err" role="alert">${esc(err)}</div>` : ''}
+    <div class="stack" style="margin-top:12px"><button class="btn" data-act="pgn-import">Analyse these games</button><button class="btn ghost" data-act="close">Cancel</button></div>`);
+}
+
+function showImportResult(r, source) {
+  const sum = importSummary(r, source);
+  if (r.skipped.length || source === 'pgn') {
+    ui.importNote = sum;
+    openSheet(`<h2 class="h2">Import finished</h2><p style="margin-top:6px"><b>${esc(sum.head)}</b></p>${sum.lines.map((l) => `<p class="small" style="margin-top:6px">${esc(l)}</p>`).join('')}<button class="btn" style="margin-top:14px" data-act="close">Done</button>`);
+  } else toast(r.analysed ? `${plural(r.analysed, 'new game')} analysed, ${plural(r.drills, 'new drill')}.` : 'No new games found.');
+}
+
+async function manualSync(count, pgn) {
   if (ui.syncing) return;
   const s = state();
+  if (s.profile.source === 'pgn' && pgn == null) { openPgnImport(); return; }   // a PGN account has nothing to fetch: ask for the games
   ui.syncing = true; render();
   try {
-    const r = await sync({ count: count || s.settings.gamesToImport, pgn: '', onStatus: (st) => { if (st.phase === 'analyse') { const b = $('[data-act="sync"]'); if (b) b.textContent = `Analysing game ${st.game} of ${st.games}`; } } });
-    toast(r.analysed ? `${plural(r.analysed, 'new game')} analysed, ${plural(r.drills, 'new drill')}.` : 'No new games found.');
-  } catch (e) { logError('sync', e); toast(e.message || 'Sync failed.'); }
-  ui.syncing = false; render();
+    const r = await sync({ count: count || s.settings.gamesToImport, pgn: pgn || '', onStatus: (st) => { if (st.phase === 'analyse') { const b = $('[data-act="sync"]'); if (b) b.textContent = `Analysing game ${st.game} of ${st.games}`; } } });
+    ui.syncing = false; render();
+    showImportResult(r, s.profile.source);
+    return;
+  } catch (e) {
+    logError('sync', e);
+    ui.syncing = false; render();
+    if (s.profile.source === 'pgn') openPgnImport(e.message || 'Sync failed.'); else toast(e.message || 'Sync failed.');
+    return;
+  }
 }
 
 /* ------------------------------------------------------------------ Explanation + line player (drill feedback and game review) */
@@ -1048,7 +1150,7 @@ function reviewLabel(rv) {
 function viewReview() {
   const s = state(), rv = ui.review, g = s.games[rv.id];
   const km = rvKey(rv);
-  const result = g.result === 'win' ? 'Won' : g.result === 'loss' ? 'Lost' : 'Drew';
+  const result = resultWord(g.result);
   const label = reviewLabel(rv);
   const chips = rv.keys.length
     ? `<div class="chips" role="group" aria-label="Key mistakes" style="margin-top:12px">${rv.keys.map((m, i) => `<button data-act="rv-km" data-v="${i}" aria-pressed="${km === m}">Move ${moveNo(m.ply)} \u00b7 \u2212${Math.round(m.wpLoss)}%</button>`).join('')}</div>`
@@ -1158,7 +1260,7 @@ function renderView() {
   const chip = $('#streakChip');
   if (s.profile && !needsOnboard) { const st = streak(s); chip.hidden = !st.current; chip.textContent = `${st.current}-day streak`; } else chip.hidden = true;
   if (needsOnboard) { ui.board = null; view.innerHTML = viewOnboard(); return; }
-  if (ui.tab === 'retry' && ui.session && !ui.drill && ui.session.idx < ui.session.ids.length) ui.drill = null;
+  if (ui.tab === 'drills' && ui.session && !ui.drill && ui.session.idx < ui.session.ids.length) ui.drill = null;
   $$('#tabs [data-tab]').forEach((b) => (b.dataset.tab === ui.tab ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current')));
   const due = dueCount(s), badge = $('#dueBadge');
   badge.hidden = !due; badge.textContent = due;
@@ -1175,7 +1277,7 @@ function renderView() {
     view.innerHTML = viewHub();
     refreshPuzzleCount();
   }
-  else if (ui.tab === 'retry') {
+  else if (ui.tab === 'drills') {
     const se = ui.session;
     if (ui.puzzle) { view.innerHTML = viewPuzzle(); mountPuzzle(); save(); return; }
     if (se && se.idx < se.ids.length && !ui.drill) { const d = currentDrill(); ui.drill = { id: d.id, phase: 'ask', start: Date.now(), thinkAt: Date.now(), hint: '', hintSq: false, graded: false }; }
@@ -1192,7 +1294,11 @@ document.addEventListener('click', async (e) => {
   if (e.target.id === 'scrim') { closeSheet(); return; }
   if (!t) return;
   if (e.target.closest('a')) return; // real links keep their normal behaviour
-  if (t.dataset.tab) { nav(t.dataset.tab); return; }
+  if (t.dataset.tab) {
+    // Opening Drills after a finished set shows the practice list, not the old "Set complete" page.
+    if (t.dataset.tab === 'drills' && ui.session && ui.session.idx >= ui.session.ids.length) ui.session = null;
+    nav(t.dataset.tab); return;
+  }
   const a = t.dataset.act, v = t.dataset.v ?? t.dataset.p, s = state();
   if (a.startsWith('pl-')) { playAct(a, v, playHost); return; }
   switch (a) {
@@ -1200,11 +1306,12 @@ document.addEventListener('click', async (e) => {
     case 'start': runOnboard(); break;
     case 'start-early': ui.onboard.early = true; ui.onboard.step = 'reveal'; setBg(`Analysing in the background`, ui.onboard.progress); render(); break;
     case 'finish-onboard': ui.onboard.step = 'form'; ui.onboard.error = ''; nav('today'); break;
-    case 'tab': nav(v); break;
+    case 'tab': if (v === 'drills' && ui.session && ui.session.idx >= ui.session.ids.length) ui.session = null; nav(v); break;
     case 'lesson': { const b = $('#lessonBody'); const open = b.classList.toggle('hide') === false; t.textContent = open ? 'Hide' : 'Read'; t.setAttribute('aria-expanded', open); break; }
     case 'start-set': {
       const today = buildToday(s);
       const res = todayResults(s);
+      if (!today.ids.length) { startSample(); break; }    // no set exists, so never claim one finished
       if (today.ids.every((i) => res[i])) { ui.report = 'week'; ui.weekOffset = 0; nav('report'); break; }
       startSession(today.ids, 'Today’s set'); break;
     }
@@ -1218,6 +1325,14 @@ document.addEventListener('click', async (e) => {
       const ids = extraDrills(s, 10, v);
       if (!ids.length) { toast('No drills left for this pattern.'); break; }
       startSession(ids, nameOf(v)); break;
+    }
+    case 'start-sample': startSample(); break;
+    case 'dismiss-note': ui.importNote = null; render(); break;
+    case 'practice-due': {
+      const key = dayKey();
+      const ids = Object.values(s.drills).filter((d) => d.box != null && !isMastered(d) && d.due <= key).map((d) => d.id);
+      if (!ids.length) { toast('Nothing is due right now.'); break; }
+      startSession(ids, 'Due reviews'); break;
     }
     case 'see-pattern': seePattern(v); break;
     case 'review': closeSheet(); ui.tab = 'diagnose'; openReview(t.dataset.id, t.dataset.ply != null ? +t.dataset.ply : undefined); break;
@@ -1249,7 +1364,7 @@ document.addEventListener('click', async (e) => {
     case 'rv-reset': ui.review.shown = ''; render(); break;
     case 'rv-drill': { const km = rvKey(ui.review); if (km && s.drills[km.id]) { ui.review = null; startSession([km.id], 'From your game'); } break; }
     case 'rv-load': backfillMoves(); break;
-    case 'hub': ui.session = null; ui.drill = null; ui.puzzle = null; nav(ui.tab === 'puzzles' ? 'puzzles' : 'retry'); break;
+    case 'hub': ui.session = null; ui.drill = null; ui.puzzle = null; nav(ui.tab === 'puzzles' ? 'puzzles' : 'drills'); break;
     case 'mode': ui.practice.mode = v; render(); break;
     case 'pp': ui.practice.pattern = v; render(); break;
     case 'pn': ui.practice.n = +v; render(); break;
@@ -1262,7 +1377,7 @@ document.addEventListener('click', async (e) => {
       if (!ids.length) { toast('No drills available for that choice.'); break; }
       startSession(ids, ui.practice.pattern === 'all' ? 'Practice' : nameOf(ui.practice.pattern)); break;
     }
-    case 'puzzle-start': ui.session = null; ui.drill = null; ui.puzzle = { theme: ui.practice.theme, difficulty: ui.practice.difficulty, moves: ui.practice.moves, seen: new Set(state().puzzleSeen || []), solved: 0, tried: 0, phase: 'loading' }; if (ui.tab !== 'puzzles') ui.tab = 'retry'; loadPuzzle(); break;
+    case 'puzzle-start': ui.session = null; ui.drill = null; ui.puzzle = { theme: ui.practice.theme, difficulty: ui.practice.difficulty, moves: ui.practice.moves, seen: new Set(state().puzzleSeen || []), solved: 0, tried: 0, phase: 'loading' }; if (ui.tab !== 'puzzles') ui.tab = 'drills'; loadPuzzle(); break;
     case 'puzzle-next': loadPuzzle(); break;
     case 'pz-hint': { const pz = ui.puzzle; pz.hint = true; ui.board.mark(pz.p.solution[pz.step].slice(0, 2), 'hint'); pzRefresh(); break; }
     case 'pz-skip': {
@@ -1273,7 +1388,7 @@ document.addEventListener('click', async (e) => {
 
     case 'idea': {
       const d = currentDrill(), dr = ui.drill;
-      if (!dr.hint) dr.hint = pat(d.pattern).idea;
+      if (!dr.hint) dr.hint = ideaText(d);
       else if (!dr.hintSq) { dr.hintSq = true; ui.board.mark(d.bestUci.slice(0, 2), 'hint'); }
       rerenderDrillPanel(); break;
     }
@@ -1282,7 +1397,7 @@ document.addEventListener('click', async (e) => {
       if (!dr.graded) { dr.graded = true; gradeDrill(s, d.id, false, Date.now() - dr.start); ui.session.results[d.id] = { ok: false }; save(); }
       nextDrill(); break;
     }
-    case 'again': { const d = currentDrill(); ui.drill = { ...ui.drill, phase: 'ask', hint: ui.drill.hint, hintSq: false, playedUci: null, start: Date.now(), thinkAt: Date.now(), lesson: null, shown: '', idx: 0 }; ui.board.setPosition(d.fen, d.side); ui.board.setEnabled(true); render(); break; }
+    case 'again': { const d = currentDrill(); ui.drill = { ...ui.drill, phase: 'ask', hint: ui.drill.hint, hintSq: false, playedUci: null, start: Date.now(), thinkAt: Date.now(), lesson: null, shown: '', idx: 0, retried: true, fast: false }; ui.board.setPosition(d.fen, d.side); ui.board.setEnabled(true); render(); break; }
     case 'answer': { const d = currentDrill(); ui.drill.shown = 'best'; ui.drill.idx = 0; if (ui.drill.lesson) { refreshLesson(); break; } ui.board.setPosition(d.fen, d.side); const m = ui.board.play(d.bestUci); ui.board.mark(d.bestUci.slice(2, 4), 'good'); ui.board.setEnabled(false); toast(`The answer was ${m.san}`); break; }
     case 'next': nextDrill(); break;
     case 'think': state().settings.thinkSecs = +v; save(); render(); break;
@@ -1293,7 +1408,14 @@ document.addEventListener('click', async (e) => {
     case 'share': shareReport(); break;
     case 'sync': manualSync(); break;
     case 'sync-from-settings': closeSheet(); manualSync(); break;
-    case 'switch': closeSheet(); s.profile = null; ui.onboard = { ...ui.onboard, step: 'form', error: '' }; save(); render(); break;
+    case 'switch': openSheet(`<h2 class="h2">Change account?</h2><p class="sub" style="margin:6px 0 14px">This removes the ${plural(Object.keys(s.games).length, 'game')}, drills, streak and reports of ${esc(s.profile.username)} from this device, so two accounts are never mixed. Download a backup first if you want to keep them. Your settings stay.</p><button class="btn danger" data-act="switch-yes">Remove and change account</button><button class="btn ghost" style="margin-top:8px" data-act="export">Download backup first</button><button class="btn ghost" style="margin-top:8px" data-act="close">Keep this account</button>`); break;
+    case 'switch-yes': closeSheet(); clearAccountData(); ui.session = null; ui.drill = null; ui.puzzle = null; ui.review = null; ui.importNote = null; ui.onboard = { ...ui.onboard, step: 'form', error: '', pgn: '', username: '' }; render(); break;
+    case 'pgn-import': {
+      const txt = ($('#pgnNew')?.value || '');
+      ui.onboard.pgn = txt;                                   // kept if the import fails, so nothing has to be pasted twice
+      if (!txt.trim()) { openPgnImport('Paste at least one game.'); break; }
+      closeSheet(); manualSync(undefined, txt); break;
+    }
     case 'export': { const b = new Blob([exportJson()], { type: 'application/json' }); const l = document.createElement('a'); l.href = URL.createObjectURL(b); l.download = `fixmyblunder-backup-${new Date().toISOString().slice(0, 10)}.json`; l.click(); break; }
     case 'reset': openSheet(`<h2 class="h2">Delete all data?</h2><p class="sub" style="margin:6px 0 14px">Your games, drills, streak and reports will be removed from this device. This cannot be undone. Download a backup first if you want to keep them.</p><button class="btn danger" data-act="reset-yes">Delete everything</button><button class="btn ghost" style="margin-top:8px" data-act="close">Keep my data</button>`); break;
     case 'reset-yes': reset(); closeSheet(); ui.session = null; ui.drill = null; ui.onboard.step = 'form'; render(); break;
@@ -1327,7 +1449,9 @@ document.addEventListener('change', (e) => { if (e.target.id === 'fbDetails') up
 document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches && e.target.matches('[role=button][data-act]')) e.target.click(); });
 $('#settingsBtn').addEventListener('click', openSettings);
 $('#streakChip').addEventListener('click', () => nav('today'));
-window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (['today', 'diagnose', 'retry', 'puzzles', 'play', 'report'].includes(t) && t !== ui.tab) { ui.tab = t; render(); } });
+window.addEventListener('hashchange', () => { const t = location.hash.slice(1);
+  const t2 = t === 'retry' ? 'drills' : t; // #retry was the old name of this tab
+  if (['today', 'diagnose', 'drills', 'puzzles', 'play', 'report'].includes(t2) && t2 !== ui.tab) { ui.tab = t2; render(); } });
 const setOffline = () => { $('#offline').hidden = navigator.onLine; };
 window.addEventListener('online', setOffline); window.addEventListener('offline', setOffline); setOffline();
 
@@ -1353,8 +1477,8 @@ function migrate() {
 }
 migrate();
 watchGlobalErrors(() => toast('Something went wrong. Open Settings, then Send feedback, to report it.'));
-const h = location.hash.slice(1);
-if (['today', 'diagnose', 'retry', 'puzzles', 'play', 'report'].includes(h)) ui.tab = h;
+const h = location.hash.slice(1) === 'retry' ? 'drills' : location.hash.slice(1);
+if (['today', 'diagnose', 'drills', 'puzzles', 'play', 'report'].includes(h)) { ui.tab = h; if (location.hash.slice(1) !== h) history.replaceState(null, '', '#' + h); }
 render();
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 export { onChange, DAY, pvToSan };

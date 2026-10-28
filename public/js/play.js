@@ -3,9 +3,18 @@
 import { Chess } from '../vendor/chess/chess.js';
 import { Board } from './board.js';
 import { esc } from './util.js';
+import { winPct } from './score.js';
+import { pvToSan } from './classify.js';
+import { MISTAKE_WP } from './analyze.js';
 import { PlayEngine, OPPONENTS, levelOf } from './playengine.js';
 
 const THINK = [[0, 'Off'], [5, '5 sec'], [15, '15 sec'], [30, '30 sec'], [60, '1 min']];
+// Coaching is for training games against Buddy Trainer or Stockfish only. A rated or competitive mode,
+// if one is ever added, must leave g.training false so no coach line or engine verdict is shown mid-game.
+const BIG_LOSS_WP = 15;        // a single move this costly gets a coach line even when nothing was captured
+const FAST_MOVE_SECS = 5;      // post-game list: every move you played faster than this
+const JUDGE_MS = 100;          // engine time per position when judging your moves
+const PIECE = { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' };
 const MIN_REPLY_MS = 350;      // so an instant book move does not feel like a glitch
 const engines = {};            // kind -> PlayEngine, created on first use and kept
 const $ = (s) => document.querySelector(s);
@@ -32,7 +41,7 @@ function getEngine(kind) {
 /* ------------------------------------------------------------------ game state */
 function newGame(cfg) {
   const me = cfg.color === 'r' ? (Math.random() < 0.5 ? 'w' : 'b') : cfg.color;
-  return { engine: cfg.engine, level: cfg.level, think: cfg.think, me, ucis: [], sans: [], status: 'ask', result: null, reason: '', takebacks: 0, started: Date.now(), thinkAt: Date.now(), token: 0, confirmResign: false, reviewing: false, reviewedId: null };
+  return { engine: cfg.engine, level: cfg.level, think: cfg.think, me, ucis: [], sans: [], status: 'ask', result: null, reason: '', takebacks: 0, started: Date.now(), thinkAt: Date.now(), token: 0, training: true, log: [], coach: null, confirmResign: false, reviewing: false, reviewedId: null };
 }
 
 const chessOf = (g) => {
@@ -96,7 +105,12 @@ function onUserMove(uci) {
   const g = P() && P().g;
   if (!g || g.status !== 'ask') return;
   g.confirmResign = false;
+  const fenBefore = chessOf(g).fen(), secs = (Date.now() - g.thinkAt) / 1000;
+  g.coach = null;                                   // a coach line belongs to the move it judged
   const m = applyMove(g, uci);
+  const e = { ply: g.ucis.length - 1, san: m.san, uci: g.ucis[g.ucis.length - 1], secs, fenBefore, fenAfter: chessOf(g).fen(), over: g.status === 'over', loss: null, bestSan: null, bestUci: null, wpBefore: null, wpAfter: null, reply: null, failed: false };
+  g.log.push(e);
+  judgeMove(g, e);
   host.announce(`You played ${m.san}.`);
   if (g.status !== 'over') { g.status = 'think'; persist(); refresh(); engineReply(g); }
   else { liveBoard(g) && liveBoard(g).setEnabled(false); refresh(); host.announce(`${g.reason}`); }
@@ -113,6 +127,8 @@ async function engineReply(g) {
     if (g.token !== tok || g.status !== 'think') return;       // taken back, resigned or replaced meanwhile
     if (!r.uci) { finish(g, chessOf(g), false); refresh(); return; }
     const m = applyMove(g, r.uci);
+    const mine = g.log[g.log.length - 1];
+    if (mine && mine.ply === g.ucis.length - 2) { mine.reply = { san: m.san, captured: m.captured || null, to: m.to }; coachCheck(g, mine); }
     if (g.status !== 'over') {
       g.status = 'ask'; g.thinkAt = Date.now();
       liveBoard(g) && liveBoard(g).setEnabled(true);
@@ -131,6 +147,7 @@ async function engineReply(g) {
 function takeback(g) {
   if (g.status !== 'ask' || g.ucis.length < 2) return;   // undo your move and the reply to it
   g.ucis.splice(-2); g.sans.splice(-2);
+  g.log = g.log.filter((e) => e.ply < g.ucis.length); g.coach = null;
   g.takebacks++; g.confirmResign = false; g.token++;
   const b = liveBoard(g);
   if (b) {
@@ -161,6 +178,70 @@ function lockForThinking(g) {
     el.innerHTML = `<span>${Math.ceil(l)}s</span><span class="tbar"><i style="width:${Math.round((1 - l / secs) * 100)}%"></i></span>`;
   };
   draw(); thinkTimer = setInterval(draw, 250);
+}
+
+/* ------------------------------------------------------------------ judging your moves (training games only) */
+/**
+ * Scores one of your moves with the on-device engine: how many win-chance points it gave up compared with the
+ * engine's best move. Runs in the background and never blocks the game. Results feed the coach line and the
+ * post-game "Fast moves" list.
+ */
+async function judgeMove(g, e) {
+  if (!g.training || !host.evaluate) { e.failed = true; return; }
+  try {
+    const before = await host.evaluate(e.fenBefore, JUDGE_MS);
+    let wpAfter;
+    if (e.over) wpAfter = winPct(1000);                       // you ended the game with that move
+    else wpAfter = winPct(-(await host.evaluate(e.fenAfter, JUDGE_MS)).cpc);
+    e.wpBefore = winPct(before.cpc); e.wpAfter = wpAfter; e.bestUci = before.best;
+    e.loss = e.uci === before.best ? 0 : Math.max(0, e.wpBefore - wpAfter);
+    e.bestSan = (before.best && pvToSan(e.fenBefore, [before.best], 1)[0]) || null;
+  } catch (err) {
+    e.failed = true;
+    host.logError && host.logError('play-judge', err);
+  }
+  coachCheck(g, e);
+  if (P() && P().g === g) refresh();
+}
+
+/** Writes one coach line when a move cost a lot. Needs both your move's cost and the opponent's reply. */
+function coachCheck(g, e) {
+  if (!g.training || e.coached || e.loss == null || (e.reply === null && !e.over)) return;
+  e.coached = true;
+  if (g.log.indexOf(e) < 0 || e.ply >= g.ucis.length) return;      // taken back meanwhile
+  const cost = Math.round(e.loss);
+  const taken = e.reply && e.reply.captured;
+  const habit = taken ? 'Before every move, name each of your pieces that nobody defends, and check whether your opponent can attack one.' : 'Before a quiet move, check every capture, check and threat, theirs as well as yours.';
+  let title, text;
+  if (taken && e.loss >= MISTAKE_WP) {
+    title = 'Piece lost';
+    text = `Your ${PIECE[taken]} on ${e.reply.to} was taken. ${e.san} cost about ${cost} win-chance points.`;
+  } else if (e.loss >= BIG_LOSS_WP) {
+    title = 'Costly move';
+    text = `${e.san} cost about ${cost} win-chance points.`;
+  } else return;
+  const why = `Before ${e.san} your win chance was about ${Math.round(e.wpBefore)}%. After it, about ${Math.round(e.wpAfter)}%.${e.bestSan ? ` The engine preferred ${e.bestSan}.` : ''}${e.reply ? ` Your opponent answered ${e.reply.san}.` : ''} ${habit}`;
+  g.coach = { ply: e.ply, title, text, why };
+  host.announce(`${title}. ${text}`);
+}
+
+const coachHtml = (g) => (g.coach ? `<div class="fb bad" role="status"><b>${esc(g.coach.title)}</b><p>${esc(g.coach.text)}</p><details class="eng"><summary>Why</summary><p>${esc(g.coach.why)}</p></details></div>` : '');
+
+const verdictOf = (e) => {
+  if (e.loss == null) return e.failed ? 'not checked' : 'checking…';
+  if (e.loss === 0) return 'best move';
+  const pts = `−${Math.round(e.loss)} pts`;
+  return e.loss < 3 ? `fine, ${pts}` : e.loss < 10 ? `inaccuracy, ${pts}` : e.loss < 20 ? `mistake, ${pts}` : `blunder, ${pts}`;
+};
+
+/** After the game: every move you played in under FAST_MOVE_SECS, with the engine's verdict. */
+function fastHtml(g) {
+  if (g.status !== 'over' || !g.training) return '';
+  const fast = g.log.filter((e) => e.secs < FAST_MOVE_SECS);
+  if (!fast.length) return '';
+  const num = (e) => `${Math.floor(e.ply / 2) + 1}${e.ply % 2 === 0 ? '.' : '...'}`;
+  return `<section class="card" style="margin-top:12px"><h2 class="h2">Fast moves</h2><p class="sub small" style="margin:2px 0 8px">Moves you played in under ${FAST_MOVE_SECS} seconds, with the engine's verdict. Quick is fine when it is right. This only lists them.</p>
+    <ul class="fastlist">${fast.map((e) => `<li><b class="mono">${num(e)} ${esc(e.san)}</b> <span>${e.secs.toFixed(1)}s</span> <span class="${e.loss != null && e.loss >= 10 ? 'bad' : ''}">${esc(verdictOf(e))}</span></li>`).join('')}</ul></section>`;
 }
 
 /* ------------------------------------------------------------------ views */
@@ -227,7 +308,9 @@ function viewGame(g) {
     <p class="sub" id="plSub">${esc(subText(g))}</p>
     <div id="think" class="thinkmini" aria-hidden="true"></div>
     <div class="board-wrap"><div id="board"></div></div>
+    <div id="plCoach">${coachHtml(g)}</div>
     <div class="plmoves" id="plMoves" aria-label="Moves">${movesHtml(g)}</div>
+    <div id="plFast">${fastHtml(g)}</div>
     <div class="stack" style="margin-top:12px" id="plActions">${actionsHtml(g)}</div></section>`;
 }
 
@@ -253,11 +336,13 @@ export function mountPlay(h) {
 
 function refresh() {
   const g = P() && P().g;
-  if (!g || !$('#plTitle')) return;
+  if (!g || !$('#plTitle') || !$('#plCoach')) return;
   $('#plTitle').innerHTML = statusText(g) + (g.status === 'think' ? '<span class="thinking"><i></i><i></i><i></i></span>' : '');
   $('#plSub').textContent = subText(g);
   $('#plMoves').innerHTML = movesHtml(g);
   $('#plActions').innerHTML = actionsHtml(g);
+  if (g.coachShown !== g.coach) { g.coachShown = g.coach; $('#plCoach').innerHTML = coachHtml(g); }   // only redraw when it changes, so "Why" stays open
+  $('#plFast').innerHTML = fastHtml(g);
   const mv = $('#plMoves'); if (mv) mv.scrollLeft = mv.scrollWidth;
 }
 

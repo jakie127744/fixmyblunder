@@ -135,7 +135,9 @@ export function classify(m) {
   if (m.wpBefore >= 70) {
     return { pattern: 'advantage', explain: `You were clearly better, and ${m.playedSan} let it slip. ${m.bestSan} kept the advantage.` };
   }
-  return { pattern: 'positional', explain: `${m.bestSan} was the better move here, with no tactic involved. You played ${m.playedSan}.` };
+  // "No tactic involved" is only true when the better move is genuinely quiet; a capture or check is a tactic by name.
+  const quiet = kind === 'quiet';
+  return { pattern: 'positional', explain: `${m.bestSan} was the better move here${quiet ? ', with no tactic involved' : ''}. You played ${m.playedSan}.` };
 }
 
 /** Material the mover gains along an engine line (pawn=1 ... queen=9), over at most 4 plies. */
@@ -163,4 +165,4 @@ export function reclassify(m, baseTime) {
     clock: m.clock ?? null, baseTime,
   });
 }
-export const CLASSIFIER_VERSION = 3;
+export const CLASSIFIER_VERSION = 4;

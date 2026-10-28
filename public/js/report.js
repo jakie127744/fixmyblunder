@@ -1,16 +1,13 @@
 // Weekly and all-time reports, computed from analysed games and drill attempts.
-import { weekStart, addDays, DAY, dayKey, fmtDay, startOfDay } from './util.js';
+import { weekStart, addDays, DAY, dayKey, fmtDay, startOfDay, plural } from './util.js';
 import { PATTERN_ORDER, pat } from './patterns.js';
 import { themeName } from './puzzles.js';
 import { mean, round1 } from './score.js';
-import { gamesByDate, patternStats, minutesTrained, streak, isMastered, puzzleStats } from './srs.js';
+import { gamesByDate, patternStats, tally, minutesTrained, streak, isMastered, puzzleStats } from './srs.js';
 
-const perGame = (games) => {
-  const out = Object.fromEntries(PATTERN_ORDER.map((p) => [p, 0]));
-  for (const g of games) for (const m of g.mistakes) out[m.pattern]++;
-  if (games.length) for (const p of PATTERN_ORDER) out[p] = out[p] / games.length;
-  return out;
-};
+// Every pattern figure here comes from tally() in srs.js, the same aggregation Diagnose uses.
+// "Per 25 games" is count * 25 / games for every pattern, so it equals the Diagnose count when 25 games are in scope.
+const perGame = (games) => Object.fromEntries(Object.entries(tally(games).byPattern).map(([p, t]) => [p, t.perGame]));
 
 export function weekly(s, anyTs = Date.now()) {
   const from = weekStart(anyTs), to = addDays(from, 7);
@@ -31,9 +28,7 @@ export function weekly(s, anyTs = Date.now()) {
   const drillsPassed = attempts.filter((a) => a.ok).length;
   // top pattern this week (fall back to latest 25 games when no games were played)
   const pool = inWeek.length ? inWeek : all.slice(0, 25);
-  const counts = Object.fromEntries(PATTERN_ORDER.map((p) => [p, 0]));
-  for (const g of pool) for (const m of g.mistakes) counts[m.pattern] += m.wpLoss;
-  const top = PATTERN_ORDER.slice().sort((a, b) => counts[b] - counts[a])[0];
+  const top = tally(pool).list[0].id;   // costliest pattern, ranked exactly as Diagnose ranks them
   const now = perGame(pool), before = perGame(all.filter((g) => g.date < from).slice(0, 25));
   const improving = all.filter((g) => g.date < from).length >= 5 && now[top] < before[top];
   const focus = patternStats(s).list[0];
@@ -43,6 +38,8 @@ export function weekly(s, anyTs = Date.now()) {
     delta: acc != null && prevAcc != null ? round1(acc - prevAcc) : null, trend,
     minutes: minutesTrained(s, from, to), daysTrained: days.size, drillsPassed, drillsTried: attempts.length, puzzlesSolved: puzzles.filter((a) => a.ok).length, puzzlesTried: puzzles.length,
     topPattern: top, topCount: Math.round(now[top] * 10) / 10, improving, focus: focus ? focus.id : top,
+    focusScope: `Latest ${plural(patternStats(s).games, 'game')}`,
+    scope: inWeek.length ? `This week, ${plural(inWeek.length, 'game')}` : `Latest ${plural(pool.length, 'game')}`,
     streak: streak(s),
   };
 }
@@ -68,15 +65,20 @@ export function allTime(s) {
   const after = trainStart ? all.filter((g) => g.date >= trainStart) : [];
   const trainedDays = trainStart ? Math.round((Date.now() - trainStart) / DAY) : 0;
   const enough = before.length >= 10 && after.length >= 10 && trainedDays >= 14;
-  const slice = enough ? Math.min(before.length, after.length, 25) : n;
-  const early = enough ? before.slice(-slice) : all, late = enough ? after.slice(-slice) : all;
+  // Without enough post-training games the window is the latest 25, the same games Diagnose counts.
+  const slice = enough ? Math.min(before.length, after.length, 25) : Math.min(n, 25);
+  const early = enough ? before.slice(-slice) : all.slice(-slice), late = enough ? after.slice(-slice) : all.slice(-slice);
   const eAcc = n ? round1(mean(early.map((g) => g.accuracy))) : null;
   const lAcc = n ? round1(mean(late.map((g) => g.accuracy))) : null;
   const markerIdx = trainStart ? weeks.findIndex((w) => w.ts <= trainStart && trainStart < addDays(w.ts, 7)) : -1;
-  const pe = perGame(early), pl = perGame(late);
-  const patterns = PATTERN_ORDER.map((p) => ({ id: p, then: round1(pe[p] * 25), now: round1(pl[p] * 25) }))
-    .filter((p) => p.then > 0 || p.now > 0)
-    .sort((a, b) => b.then - a.then);
+  const te = tally(early), tl = tally(late);
+  const patterns = PATTERN_ORDER.map((p) => ({
+    id: p, then: round1(te.byPattern[p].per25), now: round1(tl.byPattern[p].per25),
+    thenCount: te.byPattern[p].count, nowCount: tl.byPattern[p].count,
+    thenCost: round1(te.byPattern[p].costPerGame), nowCost: round1(tl.byPattern[p].costPerGame),
+  }))
+    .filter((p) => p.thenCount > 0 || p.nowCount > 0)
+    .sort((a, b) => b.thenCost - a.thenCost);
   const drills = Object.values(s.drills);
   const mastered = drills.filter(isMastered).length;
   const solved = s.attempts.filter((a) => a.ok && a.kind !== 'puzzle').length;
@@ -98,7 +100,8 @@ export function allTime(s) {
   milestones.sort((a, b) => b.ts - a.ts);
   return {
     games: n, spanDays, enough, firstTs, weeks, markerIdx, trainStart, trainedDays, beforeN: before.length, afterN: after.length, withData: withData.length, eAcc, lAcc,
-    accDelta: eAcc != null && lAcc != null ? round1(lAcc - eAcc) : null, slice, patterns,
+    accDelta: eAcc != null && lAcc != null ? round1(lAcc - eAcc) : null, slice, patterns, earlyGames: early.length, lateGames: late.length,
+    scope: `All time, ${plural(n, 'game')}`,
     solved, puzzlesSolved: pz.solved, mastered, minutes: minutesTrained(s), streak: st, milestones: milestones.slice(0, 5),
     totalMistakes: all.reduce((t, g) => t + g.mistakes.length, 0),
   };
