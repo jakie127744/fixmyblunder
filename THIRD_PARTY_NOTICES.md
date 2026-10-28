@@ -1,6 +1,6 @@
 # Third-party notices
 
-Blunderprint bundles the following. Keep this file and the licence texts alongside any copy of the app you give to other people.
+FixMyBlunder bundles the following. Keep this file and the licence texts alongside any copy of the app you give to other people.
 
 | Component | Where | Licence | What it requires |
 |---|---|---|---|

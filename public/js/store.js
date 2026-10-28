@@ -43,7 +43,7 @@ export function exportJson() { return JSON.stringify(state(), null, 1); }
 
 export function importJson(text) {
   const s = JSON.parse(text);
-  if (!s || s.v !== 1 || typeof s.games !== 'object') throw new Error('That file is not a Blunderprint backup.');
+  if (!s || s.v !== 1 || typeof s.games !== 'object') throw new Error('That file is not a FixMyBlunder backup.');
   mem = { ...blank(), ...s, settings: { ...blank().settings, ...(s.settings || {}) } };
   save();
 }

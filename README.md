@@ -1,7 +1,7 @@
-# Blunderprint (MVP)
+# FixMyBlunder (MVP)
 
 Import the games you already played, find the mistakes you keep repeating, and drill exactly those for ten minutes a day.
-Local-first PWA: no account, no server-side analysis. Built from the design plan in `chess-app-design-plan.html`.
+Live at https://fixmyblunder.com. Local-first PWA: no account, no server-side analysis. Built from the design plan in `chess-app-design-plan.html`.
 
 ## Run
 
@@ -56,11 +56,14 @@ Some themes have no 1-move puzzles because Lichess never makes them that short (
 
 ## Licences
 
-- Stockfish.js 19 is GPLv3. Shipping it means distributing this app under GPL-compatible terms. Decide this before any public release.
+- The app is released under the GNU GPL v3 (see `LICENSE`), because it ships Stockfish.js 19, which is GPLv3. Source: https://github.com/jakie127744/fixmyblunder. You may use, change and share it under those terms; changed versions you distribute must stay GPLv3 and offer their source.
+- Third-party parts keep their own licences (see `THIRD_PARTY_NOTICES.md`).
 - Pieces: Colin M.L. Burnett, CC BY-SA 3.0 (copied from the ChessBotBuddies project's `public/pieces/standard`).
 - chess.js: BSD-2-Clause.
 
 ## Before you publish
+
+- Licence: GPLv3 chosen (see Licences). Keep the source link in Settings pointing at the public repo.
 
 - Set `FEEDBACK_EMAIL` and/or `FEEDBACK_FORM_URL` in `public/js/config.js`. They drive Send feedback, error reports, and the contact line on the privacy and terms pages. With both empty the app only offers Copy.
 - Error reports: uncaught errors, engine crashes and failed syncs are logged on the device (`blunderprint.errors`, last 20). Nothing is sent unless the user presses send in Settings, Send feedback. No server or third-party service is involved.

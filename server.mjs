@@ -25,4 +25,4 @@ createServer(async (req, res) => {
   } catch {
     res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not found');
   }
-}).listen(port, () => console.log(`Blunderprint on http://localhost:${port}`));
+}).listen(port, () => console.log(`FixMyBlunder on http://localhost:${port}`));

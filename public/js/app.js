@@ -1,4 +1,4 @@
-// Blunderprint app shell: onboarding, Today, Diagnose, Retry, Report, Settings.
+// FixMyBlunder app shell: onboarding, Today, Diagnose, Retry, Report, Settings.
 import { state, save, onChange, exportJson, importJson, reset } from './store.js';
 import { Engine, workerTransport } from './engine.js';
 import { analyzeGame } from './analyze.js';
@@ -778,7 +778,7 @@ async function shareReport() {
   tile(552, 530, String(w.drillsPassed), 'drills solved');
   g.fillStyle = v('--ink'); g.font = '700 46px system-ui,sans-serif'; g.fillText(`Top pattern: ${nameOf(w.topPattern)}`, 72, 850);
   g.fillStyle = v('--ink-2'); g.font = '500 36px system-ui,sans-serif'; g.fillText(`Next focus: ${nameOf(w.focus)}`, 72, 910);
-  g.fillStyle = v('--accent'); g.font = '700 40px system-ui,sans-serif'; g.fillText('Blunderprint', 72, 1260);
+  g.fillStyle = v('--accent'); g.font = '700 40px system-ui,sans-serif'; g.fillText('FixMyBlunder', 72, 1260);
   const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
   const file = new File([blob], 'my-chess-week.png', { type: 'image/png' });
   try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'My chess week' }); return; } } catch { /* cancelled */ }
@@ -819,7 +819,7 @@ function openSettings() {
     <div class="settings-row"><b>Your data</b><span class="sub small">Stored only in this browser. Back it up before clearing site data.</span>
       <div class="row" style="gap:8px;margin-top:6px;flex-wrap:wrap"><button class="btn sm ghost" data-act="export">Download backup</button><label class="btn sm ghost" style="cursor:pointer">Restore backup<input type="file" id="restore" accept="application/json" class="hide"></label></div></div>
     <div class="settings-row"><b>Reset everything</b><span class="sub small">Deletes games, drills and history from this device.</span><button class="btn sm danger" style="margin-top:6px;width:fit-content" data-act="reset">Delete all data</button></div>
-    <p class="sub small" style="margin-top:12px">Engine: Stockfish 19 (GPLv3), running locally. Pieces: Colin M.L. Burnett (CC BY-SA 3.0). <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a></p>
+    <p class="sub small" style="margin-top:12px">Engine: Stockfish 19 (GPLv3), running locally. Pieces: Colin M.L. Burnett (CC BY-SA 3.0). FixMyBlunder is free software under GPLv3: <a href="https://github.com/jakie127744/fixmyblunder" rel="noopener" target="_blank">source code</a>. <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a></p>
     <button class="btn" style="margin-top:12px" data-act="close">Done</button>`);
 }
 
@@ -847,7 +847,7 @@ function downloadReminder() {
   const t = state().settings.reminderTime;
   if (!validTime(t)) { toast('Pick a time first.'); return; }
   const b = new Blob([reminderIcs(t, { url: location.origin + location.pathname })], { type: 'text/calendar' });
-  const l = document.createElement('a'); l.href = URL.createObjectURL(b); l.download = 'blunderprint-reminder.ics'; l.click();
+  const l = document.createElement('a'); l.href = URL.createObjectURL(b); l.download = 'fixmyblunder-reminder.ics'; l.click();
   setTimeout(() => URL.revokeObjectURL(l.href), 4000);
   toast('Open the file to add it to your calendar.');
 }
@@ -1212,13 +1212,13 @@ document.addEventListener('click', async (e) => {
     case 'sync': manualSync(); break;
     case 'sync-from-settings': closeSheet(); manualSync(); break;
     case 'switch': closeSheet(); s.profile = null; ui.onboard = { ...ui.onboard, step: 'form', error: '' }; save(); render(); break;
-    case 'export': { const b = new Blob([exportJson()], { type: 'application/json' }); const l = document.createElement('a'); l.href = URL.createObjectURL(b); l.download = `blunderprint-backup-${new Date().toISOString().slice(0, 10)}.json`; l.click(); break; }
+    case 'export': { const b = new Blob([exportJson()], { type: 'application/json' }); const l = document.createElement('a'); l.href = URL.createObjectURL(b); l.download = `fixmyblunder-backup-${new Date().toISOString().slice(0, 10)}.json`; l.click(); break; }
     case 'reset': openSheet(`<h2 class="h2">Delete all data?</h2><p class="sub" style="margin:6px 0 14px">Your games, drills, streak and reports will be removed from this device. This cannot be undone. Download a backup first if you want to keep them.</p><button class="btn danger" data-act="reset-yes">Delete everything</button><button class="btn ghost" style="margin-top:8px" data-act="close">Keep my data</button>`); break;
     case 'reset-yes': reset(); closeSheet(); ui.session = null; ui.drill = null; ui.onboard.step = 'form'; render(); break;
     case 'install': if (installEvent) { installEvent.prompt(); await installEvent.userChoice.catch(() => {}); installEvent = null; closeSheet(); } break;
     case 'close': closeSheet(); break;
     case 'feedback': openFeedback(); break;
-    case 'fb-mail': location.href = mailtoLink('Blunderprint feedback', feedbackText()); break;
+    case 'fb-mail': location.href = mailtoLink('FixMyBlunder feedback', feedbackText()); break;
     case 'fb-copy': { const txt = feedbackText(); try { await navigator.clipboard.writeText(txt); toast('Copied. Paste it into a message to us.'); } catch { const ta = $('#fbPreview'); if (ta) { $('#sheet details').open = true; toast('Select the text and copy it.'); } } break; }
     case 'rem-ics': downloadReminder(); break;
     case 'rem-off': state().settings.reminderTime = ''; save(); openSettings(); toast('Reminder cleared.'); break;

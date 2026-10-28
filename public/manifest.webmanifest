@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "Blunderprint",
-  "short_name": "Blunderprint",
+  "name": "FixMyBlunder",
+  "short_name": "FixMyBlunder",
   "description": "Find the three mistakes you keep repeating, then drill exactly those.",
   "start_url": "/",
   "scope": "/",

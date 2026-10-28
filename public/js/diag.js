@@ -38,7 +38,7 @@ export function buildReport(note = '', { includeDetails = true, gameCount = 0 } 
   if (includeDetails) {
     const nav = typeof navigator !== 'undefined' ? navigator : {};
     lines.push('--- details (no username, games or positions) ---',
-      `Blunderprint ${APP_VERSION}`,
+      `FixMyBlunder ${APP_VERSION}`,
       `Browser: ${nav.userAgent || 'unknown'}`,
       `Installed: ${typeof matchMedia === 'function' && matchMedia('(display-mode: standalone)').matches ? 'yes' : 'no'}, online: ${nav.onLine}`,
       `Games analysed: ${gameCount}`);

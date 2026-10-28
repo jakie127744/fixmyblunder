@@ -8,11 +8,11 @@ export function reminderIcs(time, { url = '', now = new Date() } = {}) {
   const [h, m] = time.split(':');
   const d = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
   const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}T${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}00Z`;
-  const text = 'Your Blunderprint set is ready. About ten minutes.';
+  const text = 'Your FixMyBlunder set is ready. About ten minutes.';
   return [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Blunderprint//Daily reminder//EN', 'CALSCALE:GREGORIAN',
-    'BEGIN:VEVENT', 'UID:daily-reminder@blunderprint', `DTSTAMP:${stamp}`,
-    `DTSTART:${d}T${h}${m}00`, 'DURATION:PT10M', 'RRULE:FREQ=DAILY', "SUMMARY:Blunderprint: today's set", `DESCRIPTION:${text}`,
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//FixMyBlunder//Daily reminder//EN', 'CALSCALE:GREGORIAN',
+    'BEGIN:VEVENT', 'UID:daily-reminder@fixmyblunder', `DTSTAMP:${stamp}`,
+    `DTSTART:${d}T${h}${m}00`, 'DURATION:PT10M', 'RRULE:FREQ=DAILY', "SUMMARY:FixMyBlunder: today's set", `DESCRIPTION:${text}`,
     ...(url ? [`URL:${url}`] : []),
     'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${text}`, 'TRIGGER:PT0M', 'END:VALARM',
     'END:VEVENT', 'END:VCALENDAR',

@@ -1,5 +1,6 @@
 {
-  "name": "blunderprint",
+  "name": "fixmyblunder",
+  "license": "GPL-3.0-only",
   "version": "0.1.0",
   "private": true,
   "description": "Find the three mistakes you keep repeating, then drill them. Local-first chess training PWA.",
