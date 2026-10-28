@@ -247,3 +247,14 @@ main:focus,main h1:focus{outline:none}
 .lp-steps .mono{font-weight:700;white-space:nowrap}
 .lp-ctl{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
 .lp-ctl .btn:disabled{opacity:.45}
+
+.seg3{grid-template-columns:repeat(3,1fr)}
+.pbars{display:flex;align-items:flex-end;gap:4px;height:130px}
+.pbar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;min-width:0}
+.pbar i{display:flex;align-items:flex-end;width:100%;background:var(--accent-soft);border-radius:4px 4px 0 0;min-height:2px}
+.pbar i b{display:block;width:100%;background:var(--accent);border-radius:4px 4px 0 0}
+.pv,.pl{font-family:var(--f-mono);font-size:10px;color:var(--ink-3);line-height:1.4}
+.ptable{width:100%;border-collapse:collapse;margin-top:14px;font-size:0.9375rem}
+.ptable th{font-family:var(--f-mono);font-size:.75rem;font-weight:500;color:var(--ink-3);text-align:right;padding:0 0 6px}
+.ptable td{padding:9px 0;border-top:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums}
+.ptable th:first-child,.ptable td:first-child{text-align:left}

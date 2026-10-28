@@ -6,7 +6,7 @@ import { fetchLichess, fetchChessCom, fromPgnText } from './importer.js';
 import { PATTERNS, PATTERN_ORDER, pat } from './patterns.js';
 import { addDrillsFromGame, patternStats, buildToday, dueCount, todayResults, gradeDrill, streak, gamesByDate, isMastered, minutesTrained, extraDrills, puzzleStats } from './srs.js';
 import { nextPuzzle, countMatching, downloadAll, THEME_GROUPS, MIXED, DIFFICULTY, MOVE_COUNTS, PATTERN_THEME, themeName } from './puzzles.js';
-import { weekly, allTime } from './report.js';
+import { weekly, allTime, puzzleReport } from './report.js';
 import { winPct } from './score.js';
 import { pvToSan, reclassify, CLASSIFIER_VERSION } from './classify.js';
 import { buildLesson } from './lessons.js';
@@ -22,7 +22,7 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const view = $('#view');
 
 const ui = {
-  tab: 'today', report: 'week', weekOffset: 0, board: null, session: null, drill: null,
+  tab: 'today', report: 'week', weekOffset: 0, pzPeriod: 'week', pzSort: 'count', board: null, session: null, drill: null,
   onboard: { step: 'form', source: 'lichess', username: '', pgn: '', error: '', counts: { games: 0, mistakes: 0, drills: 0 }, live: '', progress: 0 },
   syncing: false, review: null,
   practice: { mode: 'games', pattern: 'all', n: 10, theme: 'mix', difficulty: 'any', moves: 'any' }, puzzle: null,
@@ -125,16 +125,21 @@ function line(points, opts = {}) {
   let g = '';
   const step = max - min > 30 ? 10 : 5;
   for (let t = min; t <= max; t += step) g += `<line x1="${pl}" x2="${W - pr}" y1="${Y(t)}" y2="${Y(t)}" stroke="var(--line)"/><text x="${pl - 6}" y="${Y(t) + 3}" text-anchor="end">${t}%</text>`;
-  const segs = []; let cur = [];
-  points.forEach((p, i) => { if (p.v == null) { if (cur.length) segs.push(cur); cur = []; } else cur.push([X(i), Y(p.v)]); });
-  if (cur.length) segs.push(cur);
-  const path = segs.map((s) => `<polyline points="${s.map((q) => q.join(',')).join(' ')}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`).join('');
-  const dots = points.map((p, i) => (p.v == null ? '' : `<circle cx="${X(i)}" cy="${Y(p.v)}" r="${i === points.length - 1 || points.length < 14 ? 3.5 : 0}" fill="var(--accent)"/>`)).join('');
+  const pts = points.map((p, i) => (p.v == null ? null : [X(i), Y(p.v)])).filter(Boolean);
+  const idx = points.map((p, i) => (p.v == null ? -1 : i)).filter((i) => i >= 0);
+  let path = '';
+  for (let k = 1; k < pts.length; k++) {
+    const gap = idx[k] - idx[k - 1] > 1;
+    path += `<line x1="${pts[k - 1][0]}" y1="${pts[k - 1][1]}" x2="${pts[k][0]}" y2="${pts[k][1]}" stroke="var(--accent)" stroke-width="${gap ? 1.5 : 2.5}" ${gap ? 'stroke-dasharray="4 4" opacity=".6"' : ''} stroke-linecap="round"/>`;
+  }
+  const dots = pts.map((q) => `<circle cx="${q[0]}" cy="${q[1]}" r="3.5" fill="var(--accent)"/>`).join('');
+  const f0 = idx[0], fx = X(f0), fy = Y(points[f0].v);
+  const first = idx.length > 1 ? `<text x="${fx + 8}" y="${fy - 10}" text-anchor="start" style="fill:var(--ink-2)">${points[f0].v}%</text>` : '';
   const lastIdx = points.map((p) => p.v != null).lastIndexOf(true);
   const lx = X(lastIdx), ly = Y(points[lastIdx].v);
   const labs = (opts.labels || []).map(([i, t]) => `<text x="${X(i)}" y="${H - 6}" text-anchor="${i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle'}">${esc(t)}</text>`).join('');
   const mk = opts.marker >= 0 && opts.marker != null ? `<line x1="${X(opts.marker)}" x2="${X(opts.marker)}" y1="${pt}" y2="${H - pb}" stroke="var(--amber)" stroke-width="1.5" stroke-dasharray="4 3"/>` : '';
-  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.alt || 'Accuracy over time')}">${g}${mk}${path}${dots}<circle cx="${lx}" cy="${ly}" r="5" fill="var(--accent)"/><text x="${lx - 8}" y="${ly - 10}" text-anchor="end" style="fill:var(--ink);font-weight:600">${points[lastIdx].v}%</text>${labs}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.alt || 'Accuracy over time')}">${g}${mk}${path}${dots}${first}<circle cx="${lx}" cy="${ly}" r="5" fill="var(--accent)"/><text x="${lx - 8}" y="${ly - 10}" text-anchor="end" style="fill:var(--ink);font-weight:600">${points[lastIdx].v}%</text>${labs}</svg>`;
 }
 
 /* ------------------------------------------------------------------ background progress banner */
@@ -640,7 +645,7 @@ function mountPuzzle() {
 }
 function logPuzzle(ok) {
   const pz = ui.puzzle, s = state();
-  s.attempts.push({ t: Date.now(), id: 'lp:' + pz.p.id, ok, ms: Math.min(Date.now() - pz.start, 120000), kind: 'puzzle' });
+  s.attempts.push({ t: Date.now(), id: 'lp:' + pz.p.id, ok, ms: Math.min(Date.now() - pz.start, 120000), kind: 'puzzle', theme: pz.theme });
   pz.tried++; if (ok) pz.solved++;
   save();
 }
@@ -693,7 +698,11 @@ function viewReport() {
   const week = ui.report === 'week';
   let body = '';
   let eyebrow, title;
-  if (week) {
+  if (ui.report === 'puz') {
+    eyebrow = 'Puzzle practice';
+    title = 'Your puzzle habit';
+    body = puzzleBody(puzzleReport(s, ui.pzPeriod, ui.pzSort));
+  } else if (week) {
     const w = weekly(s, addDays(Date.now(), ui.weekOffset * 7));
     eyebrow = `Week of ${fmtRange(w.from, w.to)}`;
     title = w.isCurrent ? 'Your week in one screen' : 'That week in one screen';
@@ -705,9 +714,26 @@ function viewReport() {
     body = allBody(a);
   }
   return `<section class="view"><p class="eyebrow">${eyebrow}</p><h1 class="h1">${title}</h1>
-    <div class="seg" role="tablist" aria-label="Report range"><button role="tab" data-act="rep" data-v="week" aria-selected="${week}">Week</button><button role="tab" data-act="rep" data-v="all" aria-selected="${!week}">All time</button></div>
+    <div class="seg seg3" role="tablist" aria-label="Report range"><button role="tab" data-act="rep" data-v="week" aria-selected="${week}">Week</button><button role="tab" data-act="rep" data-v="all" aria-selected="${ui.report === 'all'}">All time</button><button role="tab" data-act="rep" data-v="puz" aria-selected="${ui.report === 'puz'}">Puzzles</button></div>
     ${week ? `<div class="weeknav"><button class="link" data-act="wk" data-v="-1">‹ Earlier</button><button class="link" data-act="wk" data-v="1" ${ui.weekOffset >= 0 ? 'disabled style="opacity:.4"' : ''}>Later ›</button></div>` : ''}
     <div class="stack">${body}</div></section>`;
+}
+
+function puzzleBody(p) {
+  if (!p.hasData) return '<div class="card"><p class="story">No puzzles solved yet.</p><p class="sub small" style="margin-top:6px">Open the Puzzles tab and try a few. They will show up here by day, week, month and theme.</p></div>';
+  const T = p.totals, tile = (k, label) => `<div class="card tile"><div class="big">${T[k].tried}</div><p class="k">${label}${T[k].acc != null ? `, ${T[k].acc}% solved first try` : ''}</p></div>`;
+  const max = Math.max(1, ...p.days.map((d) => d.tried));
+  const bars = p.days.map((d) => `<div class="pbar" title="${fmtDay(d.ts)}: ${d.solved} of ${d.tried} first try"><span class="pv">${d.tried || ''}</span><i style="height:${Math.round((d.tried / max) * 100)}%"><b style="height:${d.tried ? Math.round((d.solved / d.tried) * 100) : 0}%"></b></i><span class="pl">${new Date(d.ts).getDate()}</span></div>`).join('');
+  const seg = (act, cur, opts) => `<div class="chips" role="group">${opts.map(([v, l]) => `<button data-act="${act}" data-v="${v}" aria-pressed="${cur === v}">${l}</button>`).join('')}</div>`;
+  const rows = p.themes.map((t) => `<tr><td>${esc(t.id === '?' ? 'Before themes were tracked' : themeName(t.id))}</td><td>${t.tried}</td><td>${t.acc}%</td></tr>`).join('');
+  return `<div class="tiles">${tile('day', 'today')}${tile('week', 'this week')}${tile('month', 'this month')}${tile('all', 'all time')}</div>
+    <section class="card chart"><h2 class="h2" style="margin-bottom:4px">Puzzles per day, last 14 days</h2><p class="sub small" style="margin-bottom:10px">Bar height is puzzles tried. The dark part was solved first try.</p><div class="pbars" role="img" aria-label="Puzzles tried per day for the last 14 days">${bars}</div></section>
+    <section class="card"><h2 class="h2" style="margin-bottom:10px">By theme</h2>
+      ${seg('pz-period', p.period, [['day', 'Today'], ['week', 'Week'], ['month', 'Month'], ['all', 'All time']])}
+      <p class="sub small" style="margin:12px 0 8px">Sort by</p>
+      ${seg('pz-sort', p.sort, [['count', 'Most played'], ['acc', 'Accuracy'], ['name', 'Name']])}
+      ${rows ? `<table class="ptable"><thead><tr><th>Theme</th><th>Tried</th><th>First try</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="sub small" style="margin-top:12px">No puzzles in this period.</p>'}
+    </section>`;
 }
 
 function weekBody(w) {
@@ -749,7 +775,7 @@ function allBody(a) {
       <div class="card tile"><div class="big">${a.minutes >= 60 ? (a.minutes / 60).toFixed(1) + ' h' : a.minutes + ' min'}</div><p class="k">time trained</p></div>
       <div class="card tile"><div class="big">${a.streak.longest} ${a.streak.longest === 1 ? 'day' : 'days'}</div><p class="k">longest streak</p></div>
     </div>
-    <section class="card chart"><h2 class="h2" style="margin-bottom:8px">Accuracy since you started</h2>${line(pts, { labels: pts.length > 1 ? [[0, fmtDay(a.weeks[0].ts)], [pts.length - 1, 'Now']] : [], marker: a.markerIdx, alt: 'Weekly accuracy since the first analysed game' })}<p class="sub small" style="margin-top:6px">Weekly average. Weeks without games are left blank.${a.markerIdx >= 0 ? ' The dashed line marks when you started training.' : ''}</p></section>
+    <section class="card chart"><h2 class="h2" style="margin-bottom:8px">Accuracy since you started</h2>${line(pts, { labels: pts.length > 1 ? [[0, fmtDay(a.weeks[0].ts)], [pts.length - 1, 'Now']] : [], marker: a.markerIdx, alt: 'Weekly accuracy since the first analysed game' })}<p class="sub small" style="margin-top:6px">Each dot is one week: the average accuracy of the games you played that week (higher is better). A dashed line joins weeks with a gap in between because you played no games then.${a.markerIdx >= 0 ? ' The dashed line marks when you started training.' : ''}</p></section>
     ${a.patterns.length ? `<section class="card"><h2 class="h2">Mistakes per 25 games</h2><p class="sub small" style="margin-bottom:6px">${a.enough ? `Your ${a.slice} games before training against your latest ${a.slice}.` : 'Your starting point. This compares properly once you have new games after training.'}</p>${a.patterns.map((p) => pairHtml(p, a)).join('')}</section>` : ''}
     <section class="card"><h2 class="h2" style="margin-bottom:6px">Milestones</h2>${a.milestones.map((m) => `<div class="mile"><time>${fmtDay(m.ts)}</time><span>${esc(m.text)}</span></div>`).join('')}</section>`;
 }
@@ -1207,6 +1233,8 @@ document.addEventListener('click', async (e) => {
     case 'answer': { const d = currentDrill(); ui.drill.shown = 'best'; ui.drill.idx = 0; if (ui.drill.lesson) { refreshLesson(); break; } ui.board.setPosition(d.fen, d.side); const m = ui.board.play(d.bestUci); ui.board.mark(d.bestUci.slice(2, 4), 'good'); ui.board.setEnabled(false); toast(`The answer was ${m.san}`); break; }
     case 'next': nextDrill(); break;
     case 'rep': ui.report = v; render(); break;
+    case 'pz-period': ui.pzPeriod = v; render(); break;
+    case 'pz-sort': ui.pzSort = v; render(); break;
     case 'wk': if (!(+v > 0 && ui.weekOffset >= 0)) { ui.weekOffset += +v; render(); } break;
     case 'share': shareReport(); break;
     case 'sync': manualSync(); break;

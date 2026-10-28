@@ -1,6 +1,7 @@
 // Weekly and all-time reports, computed from analysed games and drill attempts.
-import { weekStart, addDays, DAY, dayKey, fmtDay } from './util.js';
+import { weekStart, addDays, DAY, dayKey, fmtDay, startOfDay } from './util.js';
 import { PATTERN_ORDER, pat } from './patterns.js';
+import { themeName } from './puzzles.js';
 import { mean, round1 } from './score.js';
 import { gamesByDate, patternStats, minutesTrained, streak, isMastered, puzzleStats } from './srs.js';
 
@@ -103,3 +104,30 @@ export function allTime(s) {
   };
 }
 export { fmtDay };
+
+const pct = (ok, n) => (n ? Math.round((ok / n) * 100) : null);
+
+/**
+ * Puzzle practice report, separate from drills built from your own games.
+ * period filters the theme table: day | week | month | all. sort: count | acc | name.
+ */
+export function puzzleReport(s, period = 'week', sort = 'count') {
+  const att = s.attempts.filter((a) => a.kind === 'puzzle');
+  const now = Date.now(), d = new Date(now);
+  const starts = { day: startOfDay(now), week: weekStart(now), month: new Date(d.getFullYear(), d.getMonth(), 1).getTime(), all: 0 };
+  const sum = (list) => { const ok = list.filter((a) => a.ok).length; return { tried: list.length, solved: ok, acc: pct(ok, list.length) }; };
+  const totals = Object.fromEntries(Object.entries(starts).map(([k, from]) => [k, sum(att.filter((a) => a.t >= from))]));
+  const days = [];
+  for (let k = 13; k >= 0; k--) {
+    const a = startOfDay(addDays(now, -k)), b = addDays(a, 1);
+    days.push({ ts: a, ...sum(att.filter((x) => x.t >= a && x.t < b)) });
+  }
+  const inPeriod = att.filter((a) => a.t >= starts[period]);
+  const by = {};
+  for (const a of inPeriod) (by[a.theme || '?'] ||= []).push(a);
+  const themes = Object.entries(by).map(([id, list]) => ({ id, ...sum(list) }));
+  const nm = (t) => (t.id === '?' ? 'zzz' : themeName(t.id).toLowerCase());
+  const cmp = { count: (a, b) => b.tried - a.tried || nm(a).localeCompare(nm(b)), acc: (a, b) => b.acc - a.acc || b.tried - a.tried, name: (a, b) => nm(a).localeCompare(nm(b)) }[sort] || (() => 0);
+  themes.sort(cmp);
+  return { totals, days, themes, period, sort, hasData: att.length > 0 };
+}
