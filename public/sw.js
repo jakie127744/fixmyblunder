@@ -1,12 +1,12 @@
 // Offline shell. App files are network-first (so updates arrive), the engine, pieces and chess.js are cache-first.
 // Game APIs (lichess.org, api.chess.com) always go to the network.
-const VERSION = 'bp-v14';
+const VERSION = 'bp-v15';
 const PUZZLES = 'bp-puzzles'; // kept across app updates so the puzzle download is not repeated
 const STATIC = [
-  'vendor/chess/chess.js', 'vendor/stockfish/stockfish-19-lite-single.js', 'vendor/stockfish/stockfish-19-lite-single.wasm',
+  'vendor/chess/chess.js', 'vendor/buddy/buddy-worker.js', 'vendor/buddy/buddy.js', 'vendor/buddy/buddy.wasm','vendor/stockfish/stockfish-19-lite-single.js', 'vendor/stockfish/stockfish-19-lite-single.wasm',
   ...['b', 'w'].flatMap((c) => ['k', 'q', 'r', 'b', 'n', 'p'].map((p) => `img/pieces/${c}${p}.svg`)),
 ];
-const SHELL = ['./', 'index.html', 'css/app.css', 'css/fonts.css', 'privacy.html', 'terms.html', 'fonts/figtree-400-1.woff2', 'fonts/bricolage-grotesque-500-0.woff2', 'fonts/jetbrains-mono-500-2.woff2', 'manifest.webmanifest', 'img/icon.svg', 'img/icon-192.png', 'img/icon-512.png', 'img/icon-maskable-512.png', 'img/wordmark.png', 'img/favicon-32.png', 'img/apple-touch-icon.png', 'js/app.js', 'js/analyze.js', 'js/board.js', 'js/classify.js', 'js/config.js', 'js/diag.js', 'js/reminder.js', 'js/engine.js', 'js/importer.js', 'js/lessons.js', 'js/patterns.js', 'js/puzzles.js', 'js/report.js', 'js/score.js', 'js/srs.js', 'js/store.js', 'js/util.js'];
+const SHELL = ['./', 'index.html', 'css/app.css', 'css/fonts.css', 'privacy.html', 'terms.html', 'fonts/figtree-400-1.woff2', 'fonts/bricolage-grotesque-500-0.woff2', 'fonts/jetbrains-mono-500-2.woff2', 'manifest.webmanifest', 'img/icon.svg', 'img/icon-192.png', 'img/icon-512.png', 'img/icon-maskable-512.png', 'img/wordmark.png', 'img/favicon-32.png', 'img/apple-touch-icon.png', 'js/app.js', 'js/analyze.js', 'js/board.js', 'js/classify.js', 'js/config.js', 'js/diag.js', 'js/reminder.js', 'js/engine.js', 'js/importer.js', 'js/lessons.js', 'js/patterns.js', 'js/play.js', 'js/playengine.js', 'js/puzzles.js','js/report.js', 'js/score.js', 'js/srs.js', 'js/store.js', 'js/util.js'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then(async (c) => { await c.addAll(SHELL); await c.addAll(STATIC).catch(() => {}); }).then(() => self.skipWaiting()));

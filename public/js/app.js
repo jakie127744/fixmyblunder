@@ -16,6 +16,7 @@ import { esc, plural, fmtDay, fmtRange, addDays, weekStart, DAY } from './util.j
 import { logError, watchGlobalErrors, buildReport, mailtoLink, getErrors, clearErrors } from './diag.js';
 import { FEEDBACK_EMAIL, FEEDBACK_FORM_URL } from './config.js';
 import { reminderIcs, validTime } from './reminder.js';
+import { viewPlay, mountPlay, playAct } from './play.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -110,7 +111,7 @@ function closeSheet() {
 const WCP_LINE = 'Win-chance points: how much a move cut your chance of winning. Dropping from 60% to 50% costs 10 points.';
 const nameOf = (id) => PATTERNS[id].name;
 const setSize = () => state().settings.setSize;
-const sourceLabel = (s) => ({ lichess: 'Lichess', chesscom: 'Chess.com', pgn: 'PGN' }[s] || s);
+const sourceLabel = (s) => ({ lichess: 'Lichess', chesscom: 'Chess.com', pgn: 'PGN', play: 'Played here' }[s] || s);
 const accClass = (a) => (a >= 85 ? 'hi' : a < 65 ? 'lo' : '');
 const arrow = (v) => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v);
 
@@ -183,6 +184,27 @@ async function sync({ count, pgn, onStatus }) {
   save();
   return { total: games.length, analysed: fresh.length, mistakes, drills };
 }
+
+/** Analyse a game played in the Play tab with the normal pipeline, so its mistakes become drills. */
+async function reviewPlayed(game) {
+  const s = state();
+  if (s.games[game.id]) return game.id;
+  setBg('Analysing your game', 0);
+  try {
+    const rec = await analyzeGame(game, getEngine(), {
+      movetime: s.settings.engineMs,
+      onProgress: (i, n) => setBg('Analysing your game', i / n),
+    });
+    if (!rec) throw new Error('That game is too short to review.');
+    s.games[rec.id] = rec;
+    const drills = addDrillsFromGame(s, rec);
+    if (!Object.keys(todayResults(s)).length) s.today = null;
+    save();
+    toast(drills ? `Added ${plural(drills, 'drill')} from this game.` : 'No big mistakes found.');
+    return rec.id;
+  } finally { setBg(null); }
+}
+const playHost = { ui, render: () => render(), toast, announce, state, save, logError, review: reviewPlayed, openReview: (id) => { ui.tab = 'diagnose'; history.replaceState(null, '', '#diagnose'); openReview(id); } };
 
 /* ------------------------------------------------------------------ onboarding */
 function viewOnboard() {
@@ -1147,6 +1169,7 @@ function renderView() {
     view.innerHTML = viewDiagnose();
   }
   else if (ui.tab === 'report') view.innerHTML = viewReport();
+  else if (ui.tab === 'play') { view.innerHTML = viewPlay(playHost); mountPlay(playHost); save(); return; }
   else if (ui.tab === 'puzzles') {
     if (ui.puzzle) { view.innerHTML = viewPuzzle(); mountPuzzle(); save(); return; }
     view.innerHTML = viewHub();
@@ -1171,6 +1194,7 @@ document.addEventListener('click', async (e) => {
   if (e.target.closest('a')) return; // real links keep their normal behaviour
   if (t.dataset.tab) { nav(t.dataset.tab); return; }
   const a = t.dataset.act, v = t.dataset.v ?? t.dataset.p, s = state();
+  if (a.startsWith('pl-')) { playAct(a, v, playHost); return; }
   switch (a) {
     case 'src': ui.onboard.source = v; ui.onboard.username = $('#uname')?.value || ui.onboard.username; ui.onboard.error = ''; render(); break;
     case 'start': runOnboard(); break;
@@ -1303,7 +1327,7 @@ document.addEventListener('change', (e) => { if (e.target.id === 'fbDetails') up
 document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches && e.target.matches('[role=button][data-act]')) e.target.click(); });
 $('#settingsBtn').addEventListener('click', openSettings);
 $('#streakChip').addEventListener('click', () => nav('today'));
-window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (['today', 'diagnose', 'retry', 'puzzles', 'report'].includes(t) && t !== ui.tab) { ui.tab = t; render(); } });
+window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (['today', 'diagnose', 'retry', 'puzzles', 'play', 'report'].includes(t) && t !== ui.tab) { ui.tab = t; render(); } });
 const setOffline = () => { $('#offline').hidden = navigator.onLine; };
 window.addEventListener('online', setOffline); window.addEventListener('offline', setOffline); setOffline();
 
@@ -1330,7 +1354,7 @@ function migrate() {
 migrate();
 watchGlobalErrors(() => toast('Something went wrong. Open Settings, then Send feedback, to report it.'));
 const h = location.hash.slice(1);
-if (['today', 'diagnose', 'retry', 'puzzles', 'report'].includes(h)) ui.tab = h;
+if (['today', 'diagnose', 'retry', 'puzzles', 'play', 'report'].includes(h)) ui.tab = h;
 render();
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 export { onChange, DAY, pvToSan };

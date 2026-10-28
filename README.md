@@ -31,6 +31,12 @@ First import: after five games you can open your patterns and start drilling whi
 
 Data lives in `localStorage` (`blunderprint.v1`). Settings has backup and restore as JSON.
 
+## Play
+
+The Play tab is a game against **Buddy Trainer** (the C++ engine behind the Lichess bot, built to WebAssembly in `vendor/buddy/`) or **Stockfish** (capped to 1400 to 2300, or full strength). There are no clocks. "Think first" is an optional delay that keeps the board locked on your turns. An unfinished game resumes after a reload. "Review this game" runs it through the normal analysis, so its mistakes become drills.
+
+Rebuild Buddy from `E:\Buddy V3\engine_v3_cpp` with `build_wasm.bat`, then copy `buddy.js` and `buddy.wasm` to `public/vendor/buddy/`. Buddy runs single-threaded here (the Lichess bot used 3 threads), so expect it to play somewhat weaker than on Lichess. Pawns always promote to a queen.
+
 ## Game review
 
 Tap any game on the Diagnose tab. You see only its biggest mistakes (at least 12 points of win chance, at most five) as chips, a win-chance graph you can tap to jump around, and the board with arrows to step through every move.
