@@ -3,7 +3,7 @@ import { Chess } from '../vendor/chess/chess.js';
 
 const lower = (s) => String(s || '').toLowerCase();
 
-/** Shortest game we analyse, in half-moves (plies). The importer and the analyser both enforce this one value. */
+/** Shortest game we analyze, in half-moves (plies). The importer and the analyser both enforce this one value. */
 export const MIN_PLIES = 12;
 
 function resultFor(color, winner) {

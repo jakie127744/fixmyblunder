@@ -1,4 +1,4 @@
-// Weekly and all-time reports, computed from analysed games and drill attempts.
+// Weekly and all-time reports, computed from analyzed games and drill attempts.
 import { weekStart, addDays, DAY, dayKey, fmtDay, startOfDay, plural } from './util.js';
 import { PATTERN_ORDER, pat } from './patterns.js';
 import { themeName } from './puzzles.js';
@@ -85,7 +85,7 @@ export function allTime(s) {
   const pz = puzzleStats(s);
   const st = streak(s);
   const milestones = [];
-  if (n) milestones.push({ ts: firstTs, text: `Baseline set from ${n} analysed games` });
+  if (n) milestones.push({ ts: firstTs, text: `Baseline set from ${n} analyzed games` });
   const firstAtt = s.attempts.find((a) => a.kind !== 'puzzle');
   if (firstAtt) milestones.push({ ts: firstAtt.t, text: 'First drill solved' });
   let c = 0;

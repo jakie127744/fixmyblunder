@@ -172,6 +172,18 @@ textarea{padding:12px 14px;min-height:130px;font-family:var(--f-mono);font-size:
 /* Game review */
 .game[data-act]{cursor:pointer}
 .game[data-act]:active{background:var(--surface-2)}
+.sgroup{border-top:1px solid var(--line);padding:2px 0}
+.sgroup>summary{cursor:pointer;min-height:48px;display:flex;align-items:center;font-weight:700;list-style:none}
+.sgroup>summary::-webkit-details-marker{display:none}
+.sgroup>summary::after{content:"\203A";margin-left:auto;font-size:1.4rem;color:var(--ink-3);transition:transform .15s}
+.sgroup[open]>summary::after{transform:rotate(90deg)}
+.mvlist{display:grid;grid-template-columns:32px 1fr 1fr;gap:4px;max-height:320px;overflow-y:auto}
+.mvlist .mn{align-self:center;color:var(--ink-3);font-size:0.8125rem}
+.mv{display:flex;justify-content:space-between;align-items:baseline;gap:6px;min-height:40px;padding:4px 10px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);font:inherit}
+.mv small{color:var(--ink-3);font-size:0.75rem}
+.mv.bad{border-color:var(--bad);background:var(--bad-soft)}
+.mv.bad small{color:var(--bad)}
+.mv.cur{outline:2px solid var(--accent);outline-offset:1px}
 .rvctl{display:grid;grid-template-columns:60px 1fr 1fr 60px;gap:8px;align-items:center;margin-top:12px}
 .rvctl .btn{min-height:56px;font-size:0.9375rem;padding:0 6px;line-height:1.25;font-weight:600}
 .rvctl .btn:first-child,.rvctl .btn:last-child{font-size:1.75rem}
@@ -192,7 +204,7 @@ textarea{padding:12px 14px;min-height:130px;font-family:var(--f-mono);font-size:
 
 /* Tab bar, sheet, toast */
 .tabs{position:fixed;left:0;right:0;bottom:0;background:color-mix(in srgb,var(--surface) 94%,transparent);backdrop-filter:blur(10px);border-top:1px solid var(--line);display:flex;justify-content:center;padding:6px max(8px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px));z-index:20}
-.tabs nav{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;width:100%;max-width:560px}
+.tabs nav{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;width:100%;max-width:560px}
 .tabs button{display:flex;flex-direction:column;align-items:center;gap:3px;border:0;background:none;min-height:56px;border-radius:14px;color:var(--ink-3);font-size:0.7813rem;padding:0 2px;font-weight:600;position:relative}
 .tabs button[aria-current="page"]{color:var(--accent);background:var(--accent-soft)}
 .tabs .badge{position:absolute;top:6px;right:calc(50% - 22px);min-width:18px;height:18px;border-radius:9px;background:var(--amber);color:#fff;font-size:0.75rem;display:grid;place-items:center;padding:0 5px}

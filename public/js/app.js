@@ -171,7 +171,7 @@ function explainNoGames(source, username, skipped, pasted) {
   const n = skipped.length;
   if (reasons.length === 1) {
     const r = reasons[0];
-    if (r === 'short') return n === 1 ? `${skipText(skipped[0])} Paste a longer game.` : `All ${n} games are too short to analyse: each needs at least ${MIN_PLIES} half-moves (${MIN_PLIES / 2} moves each).`;
+    if (r === 'short') return n === 1 ? `${skipText(skipped[0])} Paste a longer game.` : `All ${n} games are too short to analyze: each needs at least ${MIN_PLIES} half-moves (${MIN_PLIES / 2} moves each).`;
     if (r === 'name') return `"${username}" is not White or Black in ${n === 1 ? 'that game' : `any of those ${n} games`}. Check the name matches the PGN exactly.`;
     if (r === 'variant') return `${n === 1 ? 'That game is' : 'Those games are'} not standard chess from the starting position.`;
     return `${n === 1 ? 'That game' : 'Those games'} could not be read as PGN.`;
@@ -180,10 +180,10 @@ function explainNoGames(source, username, skipped, pasted) {
   return `None of the ${n} games could be used: ${reasons.map((r) => `${kinds[r]} ${label[r]}`).join(', ')}.`;
 }
 
-/** "3 pasted, 2 analysed, 1 skipped" plus one line per skipped game. */
+/** "3 pasted, 2 analyzed, 1 skipped" plus one line per skipped game. */
 function importSummary(r, source) {
   const seen = r.pasted != null ? r.pasted : r.found + r.skipped.length;
-  const head = `${seen} ${source === 'pgn' ? 'pasted' : 'found'}, ${r.analysed} analysed${r.existing ? `, ${r.existing} already analysed` : ''}${r.skipped.length ? `, ${r.skipped.length} skipped` : ''}.`;
+  const head = `${seen} ${source === 'pgn' ? 'pasted' : 'found'}, ${r.analysed} analyzed${r.existing ? `, ${r.existing} already analyzed` : ''}${r.skipped.length ? `, ${r.skipped.length} skipped` : ''}.`;
   return { head, lines: r.skipped.map(skipText) };
 }
 
@@ -224,15 +224,15 @@ async function sync({ count, pgn, onStatus }) {
   return { pasted, found: games.length, existing: games.length - fresh.length, analysed, skipped, mistakes, drills };
 }
 
-/** Analyse a game played in the Play tab with the normal pipeline, so its mistakes become drills. */
+/** Analyze a game played in the Play tab with the normal pipeline, so its mistakes become drills. */
 async function reviewPlayed(game) {
   const s = state();
   if (s.games[game.id]) return game.id;
-  setBg('Analysing your game', 0);
+  setBg('Analyzing your game', 0);
   try {
     const rec = await analyzeGame(game, getEngine(), {
       movetime: s.settings.engineMs,
-      onProgress: (i, n) => setBg('Analysing your game', i / n),
+      onProgress: (i, n) => setBg('Analyzing your game', i / n),
     });
     if (!rec) throw new Error('That game is too short to review.');
     s.games[rec.id] = rec;
@@ -246,6 +246,32 @@ async function reviewPlayed(game) {
 const playHost = { ui, render: () => render(), toast, announce, state, save, logError, review: reviewPlayed, evaluate: (fen, ms = 100) => getEngine().evaluate(fen, { movetime: ms }), openReview: (id) => { ui.tab = 'diagnose'; history.replaceState(null, '', '#diagnose'); openReview(id); } };
 
 /* ------------------------------------------------------------------ onboarding */
+const GAME_COUNTS = [25, 50, 75, 100];
+const AUTO_SYNC_COUNT = 100;
+
+/** The first time Diagnose opens in a session, fetch the active account's latest games (up to 100) and analyze only the ones not seen before. */
+async function autoSync() {
+  const s = state(), p = s.profile;
+  if (!p || p.source === 'pgn' || ui.syncing || !navigator.onLine) return;
+  const label = sourceLabel(p.source);
+  ui.syncing = true;
+  setBg(`Checking ${label} for new games`, 0);
+  try {
+    const r = await sync({
+      count: AUTO_SYNC_COUNT, pgn: '',
+      onStatus: (st) => { if (st.phase === 'analyse') setBg(`Analyzing new game ${st.game} of ${st.games} · ${Math.round((((st.game - 1) + st.frac) / st.games) * 100)}%`, ((st.game - 1) + st.frac) / st.games); },
+    });
+    ui.syncing = false; setBg(null);
+    if (r.analysed) {
+      toast(`${plural(r.analysed, 'new game')} analyzed, ${plural(r.drills, 'new drill')} added.`);
+      if (['today', 'diagnose', 'report'].includes(ui.tab) && !ui.review) render();
+    }
+  } catch (e) {
+    logError('autosync', e);
+    ui.syncing = false; setBg(null);
+    toast(`Could not check ${label} for new games. ${e.message || ''}`.trim());
+  }
+}
 function viewOnboard() {
   const o = ui.onboard;
   if (o.step === 'form') {
@@ -267,14 +293,15 @@ function viewOnboard() {
         <input type="text" id="uname" value="${esc(o.username)}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${o.source === 'pgn' ? 'Name as it appears as White or Black' : 'e.g. your username'}">
         ${o.source === 'pgn' ? `<label class="fl" for="pgn">Games (PGN)</label><textarea id="pgn" placeholder="Paste one or more games">${esc(o.pgn)}</textarea>` : ''}
         ${o.error ? `<div class="err" role="alert">${esc(o.error)}${o.reportable ? ' <button class="link" data-act="feedback" style="color:inherit;padding:0 4px">Send a report</button>' : ''}</div>` : ''}
-        <button class="btn" style="margin-top:14px" data-act="start">${o.source === 'pgn' ? 'Analyse these games' : `Analyse my last ${state().settings.gamesToImport} games`}</button>
+        ${o.source === 'pgn' ? '' : `<p class="group-title" style="margin-top:14px">How many recent games</p><div class="chips" role="group" aria-label="How many recent games to analyze">${GAME_COUNTS.map((n) => `<button data-act="gcount" data-v="${n}" aria-pressed="${state().settings.gamesToImport === n}">${n}</button>`).join('')}</div><p class="small sub" style="margin-top:6px">More games find your patterns more reliably but take longer to analyze.</p>`}
+        <button class="btn" style="margin-top:14px" data-act="start">${o.source === 'pgn' ? 'Analyze these games' : `Analyze my last ${state().settings.gamesToImport} games`}</button>
         <p class="small sub" style="margin-top:10px">Fewer than five games? That still works, but patterns are rough guesses until you have played more. Add games later from Settings and they sharpen.</p>
       </div>
     </section>`;
   }
   if (o.step === 'analyse') {
     return `<section class="view welcome">
-      <p class="eyebrow">Analysing on your device</p>
+      <p class="eyebrow">Analyzing on your device</p>
       <h1 class="h1">Looking for the mistakes you repeat</h1>
       <div class="card" style="margin-top:18px">
         <div class="bar"><i style="width:${Math.round(o.progress * 100)}%"></i></div>
@@ -282,18 +309,18 @@ function viewOnboard() {
         <div class="counts"><div><b>${o.counts.games}</b><span>games</span></div><div><b>${o.counts.mistakes}</b><span>mistakes</span></div><div><b>${o.counts.drills}</b><span>drills ready</span></div></div>
       </div>
       <button class="btn" id="earlyBtn" data-act="start-early" style="margin-top:14px" ${o.canStart ? '' : 'hidden'}>See my patterns now</button>
-      <p class="sub small" style="margin-top:14px">First time takes a minute or two. Once five games are done you can start, and the rest keep analysing in the background.</p>
+      <p class="sub small" style="margin-top:14px">First time takes a minute or two. Once five games are done you can start, and the rest keep analyzing in the background.</p>
     </section>`;
   }
   // reveal
   const ps = patternStats(state());
   const max = Math.max(1, ...ps.list.map((p) => p.cost));
   return `<section class="view welcome">
-    <p class="eyebrow">${plural(ps.games, 'game')} analysed</p>
+    <p class="eyebrow">${plural(ps.games, 'game')} analyzed</p>
     <h1 class="h1">Your top three patterns</h1>
     <p class="sub">Ranked by how many win-chance points each one cost you. ${WCP_LINE.replace('Win-chance points: h', 'H')}</p>
     ${ps.games < 5 ? `<div class="card" style="margin-top:12px;background:var(--amber-soft);border-color:transparent"><p><b>Only ${plural(ps.games, 'game')} to go on.</b> These patterns are early guesses. Play more, then tap Sync games in Settings and they will sharpen.</p></div>` : ''}
-    ${ui.syncing && o.early ? `<div class="card" style="margin-top:12px;background:var(--amber-soft);border-color:transparent"><p><b>Still analysing.</b> ${esc(o.live || '')} These numbers will keep updating.</p></div>` : ''}
+    ${ui.syncing && o.early ? `<div class="card" style="margin-top:12px;background:var(--amber-soft);border-color:transparent"><p><b>Still analyzing.</b> ${esc(o.live || '')} These numbers will keep updating.</p></div>` : ''}
     ${importNoteHtml()}
     <div class="stack reveal">${ps.list.filter((p) => p.count).slice(0, 3).map((p, i) => patCard(p, max, i + 1, false)).join('') || '<div class="card"><p>No clear mistakes found in these games, so there is nothing to drill from them yet. Try a few sample positions now, and add more games later to find patterns.</p></div>'}</div>
     ${Object.keys(state().drills).length
@@ -321,7 +348,7 @@ async function runOnboard() {
       count: s.settings.gamesToImport, pgn: o.pgn,
       onStatus: (st) => {
         if (st.phase === 'fetch') o.live = `Fetching your ${sourceLabel(o.source)} games`;
-        if (st.phase === 'analyse') { o.progress = ((st.game - 1) + st.frac) / st.games; o.live = `Analysing game ${st.game} of ${st.games}`; }
+        if (st.phase === 'analyse') { o.progress = ((st.game - 1) + st.frac) / st.games; o.live = `Analyzing game ${st.game} of ${st.games}`; }
         if (st.phase === 'game') {
           o.counts = { games: st.game, mistakes: st.mistakes, drills: st.drills };
           const top = st.rec.mistakes[0];
@@ -329,7 +356,7 @@ async function runOnboard() {
         }
         if (st.phase === 'game' && st.game >= 5 && st.game < st.games && !o.canStart) { o.canStart = true; const eb = $('#earlyBtn'); if (eb) eb.hidden = false; }
         if (o.early) {
-          setBg(`Analysing game ${Math.min(st.game || 0, st.games || 0)} of ${st.games || '?'}`, o.progress);
+          setBg(`Analyzing game ${Math.min(st.game || 0, st.games || 0)} of ${st.games || '?'} · ${Math.round(o.progress * 100)}% · ${plural(o.counts.mistakes, 'mistake')} found`, o.progress);
           if (st.phase === 'game' && o.step === 'reveal') render();
         }
         const el = view.querySelector('.live');
@@ -347,7 +374,7 @@ async function runOnboard() {
     if (o.early) {
       setBg(null);
       if (o.step === 'reveal' || ['today', 'diagnose', 'report'].includes(ui.tab)) render();
-      toast('All games analysed.');
+      toast('All games analyzed.');
       return;
     }
     o.step = 'reveal';
@@ -394,7 +421,7 @@ function viewToday() {
   if (!ids.length) {
     const isPgn = s.profile && s.profile.source === 'pgn';
     return `<section class="view"><h1 class="h1">Nothing to drill from your games yet</h1><p class="sub">No mistakes were found to turn into drills. You can still train now with a few sample positions, or add more games and drills will appear here.</p>
-      <div class="stack"><button class="btn" data-act="start-sample">Try a sample set</button><button class="btn ghost" data-act="tab" data-v="puzzles">Practise themed puzzles</button><button class="btn ghost" data-act="sync">${isPgn ? 'Add games from PGN' : 'Import more games'}</button></div></section>`;
+      <div class="stack"><button class="btn" data-act="start-sample">Try a sample set</button><button class="btn ghost" data-act="tab" data-v="puzzles">Practice themed puzzles</button><button class="btn ghost" data-act="sync">${isPgn ? 'Add games from PGN' : 'Import more games'}</button></div></section>`;
   }
   const allDone = doneN === ids.length;
   const mins = Math.max(1, Math.round((ids.length - doneN) * 1.5));
@@ -434,11 +461,12 @@ function viewDiagnose() {
   const max = Math.max(1, ...ps.list.map((p) => p.cost));
   const withData = ps.list.filter((p) => p.count);
   return `<section class="view">
+    <div class="row"><button class="link" data-act="tab" data-v="report" style="padding-left:0">‹ Report</button></div>
     <p class="eyebrow">${esc(sourceLabel(s.profile.source))} · ${esc(s.profile.username)}${s.lastSync ? ` · synced ${fmtDay(s.lastSync)}` : ''}</p>
-    <h1 class="h1">Your last ${plural(ps.games, 'game')}</h1>
+    <h1 class="h1">${s.profile.source === 'pgn' ? 'Your' : 'Your last'} ${plural(ps.games, 'game')}</h1>
     <p class="sub">The patterns that cost you the most win chance. Words are templates over engine facts, never guesses.</p>
     <div class="stack">
-      <button class="btn ghost" data-act="sync" ${ui.syncing ? 'disabled' : ''}>${ui.syncing ? 'Analysing…' : s.profile.source === 'pgn' ? 'Add games from PGN' : 'Import new games'}</button>
+      <button class="btn ghost" data-act="sync" ${ui.syncing ? 'disabled' : ''}>${ui.syncing ? 'Analyzing…' : s.profile.source === 'pgn' ? 'Add games from PGN' : 'Import new games'}</button>
       ${importNoteHtml()}
       ${s.staleMistakes ? `<div class="card" style="background:var(--amber-soft);border-color:transparent"><p><b>${plural(s.staleMistakes, 'older mistake')}</b> use the previous labels. Delete your data in Settings and import again to refresh them.</p></div>` : ''}
       ${withData.length ? withData.map((p, i) => patCard(p, max, i + 1)).join('') : '<div class="card"><p>No mistakes found. Great games, or import more.</p></div>'}
@@ -654,17 +682,17 @@ function viewHub() {
     const n = Math.min(pr.n, avail);
     const dueNow = dueCount(s), dueTom = dueTomorrowCount(s), noDrills = !Object.keys(s.drills).length;
     const setLine = !t.ids.length ? 'No drills from your games yet.' : left.length ? `${plural(left.length, 'drill')} left in today’s set.` : 'Today’s set is done, so everything here is extra.';
-    return `<section class="view"><p class="eyebrow">Drills</p><h1 class="h1">Do more, your way</h1>${modeBar}
+    return `<section class="view"><p class="eyebrow">Train</p><h1 class="h1">Do more, your way</h1>${modeBar}
       <p class="sub" style="margin-top:12px">Positions from your own games. ${setLine}</p>
       <div class="stack" style="margin-top:12px">
         ${left.length ? '<button class="btn" data-act="start-set">Continue today’s set</button>' : ''}
-        ${noDrills ? '<section class="card"><h2 class="h2">Nothing to drill from your games yet</h2><p class="sub small" style="margin:4px 0 10px">Try a few sample positions now, or practise themed puzzles.</p><button class="btn" data-act="start-sample">Try a sample set</button><button class="btn ghost" style="margin-top:8px" data-act="mode" data-v="puzzles">Practise themed puzzles</button></section>' : `<section class="card"><h2 class="h2">Reviews</h2><p class="sub small" style="margin:4px 0 10px">${plural(dueNow, 'position')} due today, ${dueTom} due tomorrow. Missed drills come back the next day.</p>${dueNow ? `<button class="btn" data-act="practice-due">Review ${plural(dueNow, 'due position')}</button>` : ''}</section>`}
+        ${noDrills ? '<section class="card"><h2 class="h2">Nothing to drill from your games yet</h2><p class="sub small" style="margin:4px 0 10px">Try a few sample positions now, or practice themed puzzles.</p><button class="btn" data-act="start-sample">Try a sample set</button><button class="btn ghost" style="margin-top:8px" data-act="mode" data-v="puzzles">Practice themed puzzles</button></section>' : `<section class="card"><h2 class="h2">Reviews</h2><p class="sub small" style="margin:4px 0 10px">${plural(dueNow, 'position')} due today, ${dueTom} due tomorrow. Missed drills come back the next day.</p>${dueNow ? `<button class="btn" data-act="practice-due">Review ${plural(dueNow, 'due position')}</button>` : ''}</section>`}
         <section class="card"><h2 class="h2">Pick a mistake type</h2><p class="sub small" style="margin:4px 0 10px">Reviews that are due come first. Numbers show drills available.</p>
           <div class="chips" role="group" aria-label="Mistake type">${chip('pp', 'all', `All types · ${total}`, pr.pattern === 'all', !total)}${PATTERN_ORDER.map((p) => chip('pp', p, `${esc(nameOf(p))} · ${counts[p]}`, pr.pattern === p, !counts[p])).join('')}</div>
           <p class="group-title" style="margin-top:16px">How many</p>
           <div class="chips" role="group" aria-label="How many drills">${[5, 10, 20].map((k) => chip('pn', k, k, pr.n === k, false)).join('')}</div>
           ${thinkPick}
-          ${total === 0 ? '<p class="sub small" style="margin-top:8px">Import more games on the Diagnose tab to find more mistakes.</p>' : ''}
+          ${total === 0 ? '<p class="sub small" style="margin-top:8px">Import more games from Report, under Your games and mistake patterns, to find more mistakes.</p>' : ''}
         </section>
       </div>
       <div class="cta"><button class="btn" data-act="practice" ${avail ? '' : 'disabled'}>${avail ? `Start ${plural(n, 'drill')}` : 'No drills available'}</button></div></section>`;
@@ -811,7 +839,7 @@ function viewSummary() {
     <div class="stack">
       <div class="tiles"><div class="card tile"><div class="big up">${got}/${ids.length}</div><p class="k">solved first try</p></div><div class="card tile"><div class="big">${st.current || 0}</div><p class="k">day streak</p></div></div>
       <section class="card"><p class="story">${se.sample ? 'Sample positions are not saved to your reports. Add more games and drills from your own mistakes will appear on Today.' : got === ids.length ? 'Every position solved. These come back later on a spaced schedule.' : 'The ones you missed return tomorrow, and Today shows them as due tomorrow. That is how they stick.'}</p></section>
-      ${se.sample ? '<button class="btn" data-act="tab" data-v="puzzles">Practise themed puzzles</button>' : '<button class="btn" data-act="tab" data-v="report">See your report</button>'}
+      ${se.sample ? '<button class="btn" data-act="tab" data-v="puzzles">Practice themed puzzles</button>' : '<button class="btn" data-act="tab" data-v="report">See your report</button>'}
       <button class="btn ghost" data-act="tab" data-v="today">Back to Today</button>
     </div></section>`;
 }
@@ -840,11 +868,11 @@ function viewReport() {
   return `<section class="view"><p class="eyebrow">${eyebrow}</p><h1 class="h1">${title}</h1>
     <div class="seg seg3" role="tablist" aria-label="Report range"><button role="tab" data-act="rep" data-v="week" aria-selected="${week}">Week</button><button role="tab" data-act="rep" data-v="all" aria-selected="${ui.report === 'all'}">All time</button><button role="tab" data-act="rep" data-v="puz" aria-selected="${ui.report === 'puz'}">Puzzles</button></div>
     ${week ? `<div class="weeknav"><button class="link" data-act="wk" data-v="-1">‹ Earlier</button><button class="link" data-act="wk" data-v="1" ${ui.weekOffset >= 0 ? 'disabled style="opacity:.4"' : ''}>Later ›</button></div>` : ''}
-    <div class="stack">${body}</div></section>`;
+    <div class="stack"><button class="btn ghost" data-act="tab" data-v="diagnose">Your games and mistake patterns</button>${body}</div></section>`;
 }
 
 function puzzleBody(p) {
-  if (!p.hasData) return '<div class="card"><p class="story">No puzzles solved yet.</p><p class="sub small" style="margin-top:6px">Open the Puzzles tab and try a few. They will show up here by day, week, month and theme.</p></div>';
+  if (!p.hasData) return '<div class="card"><p class="story">No puzzles solved yet.</p><p class="sub small" style="margin-top:6px">Open the Train tab, switch to Puzzles and try a few. They will show up here by day, week, month and theme.</p></div>';
   const T = p.totals, tile = (k, label) => `<div class="card tile"><div class="big">${T[k].tried}</div><p class="k">${label}${T[k].acc != null ? `, ${T[k].acc}% solved first try` : ''}</p></div>`;
   const max = Math.max(1, ...p.days.map((d) => d.tried));
   const bars = p.days.map((d) => `<div class="pbar" title="${fmtDay(d.ts)}: ${d.solved} of ${d.tried} first try"><span class="pv">${d.tried || ''}</span><i style="height:${Math.round((d.tried / max) * 100)}%"><b style="height:${d.tried ? Math.round((d.solved / d.tried) * 100) : 0}%"></b></i><span class="pl">${new Date(d.ts).getDate()}</span></div>`).join('');
@@ -866,7 +894,7 @@ function weekBody(w) {
   if (!w.hasData) return '<div class="card"><p class="story">No games or drills this week yet.</p><p class="sub small" style="margin-top:6px">Play a few games, import them, then finish today’s set.</p></div>';
   const topName = nameOf(w.topPattern), focus = nameOf(w.focus);
   const story = [
-    w.games ? `You analysed ${plural(w.games, 'game')}${w.acc != null ? ` at ${w.acc}% accuracy${w.delta != null ? (w.delta >= 0 ? `, up ${w.delta}` : `, down ${Math.abs(w.delta)}`) + ' on the week before' : ''}` : ''}.` : 'No new games this week.',
+    w.games ? `You analyzed ${plural(w.games, 'game')}${w.acc != null ? ` at ${w.acc}% accuracy${w.delta != null ? (w.delta >= 0 ? `, up ${w.delta}` : `, down ${Math.abs(w.delta)}`) + ' on the week before' : ''}` : ''}.` : 'No new games this week.',
     w.drillsTried ? `You trained on ${plural(w.daysTrained, 'day')} and solved ${w.drillsPassed} of ${w.drillsTried} drills.` : 'No drills this week yet.',
     `${topName} cost you the most (${w.scope.toLowerCase()})${w.improving ? ' and is improving' : ''}. Next focus: ${focus.toLowerCase()} (${w.focusScope.toLowerCase()}).`,
   ].join(' ');
@@ -878,7 +906,7 @@ function weekBody(w) {
       <div class="card tile"><div class="big" style="font-size:21px;line-height:1.15">${esc(topName)}</div><p class="k">top pattern${w.improving ? ', improving' : ''}${scopeLine(w.scope)}</p></div>
       <div class="card tile"><div class="big" style="font-size:21px;line-height:1.15">${esc(focus)}</div><p class="k">next week’s focus${scopeLine(w.focusScope)}</p></div>
     </div>
-    <section class="card chart"><h2 class="h2" style="margin-bottom:8px">Accuracy, last 6 weeks</h2><p class="scope">Weekly averages, all analysed games</p>${line(pts, { labels: [[0, fmtDay(w.trend[0].ts)], [5, w.isCurrent ? 'Now' : fmtDay(w.trend[5].ts)]], alt: 'Weekly accuracy for the last six weeks' })}</section>
+    <section class="card chart"><h2 class="h2" style="margin-bottom:8px">Accuracy, last 6 weeks</h2><p class="scope">Weekly averages, all analyzed games</p>${line(pts, { labels: [[0, fmtDay(w.trend[0].ts)], [5, w.isCurrent ? 'Now' : fmtDay(w.trend[5].ts)]], alt: 'Weekly accuracy for the last six weeks' })}</section>
     <button class="btn" data-act="share">Share my report</button>`;
 }
 
@@ -894,14 +922,14 @@ function allBody(a) {
   return `${note}<p class="story">${esc(story)}</p>
     <div class="tiles">
       <div class="card tile"><div class="big ${a.accDelta == null ? '' : a.accDelta >= 0 ? 'up' : 'down'}">${a.enough && a.accDelta != null ? arrow(a.accDelta) + ' pts' : a.lAcc + '%'}</div><p class="k">${a.enough && a.accDelta != null ? `accuracy, ${a.eAcc}% to ${a.lAcc}%` : 'baseline accuracy'}${scopeLine(a.scope)}</p></div>
-      <div class="card tile"><div class="big">${a.games}</div><p class="k">games analysed${scopeLine('All time')}</p></div>
+      <div class="card tile"><div class="big">${a.games}</div><p class="k">games analyzed${scopeLine('All time')}</p></div>
       <div class="card tile"><div class="big">${a.solved}</div><p class="k">drills solved${scopeLine('All time')}</p></div>
       <div class="card tile"><div class="big">${a.mastered}</div><p class="k">mistakes mastered${scopeLine('All time')}</p></div>
       <div class="card tile"><div class="big">${a.puzzlesSolved}</div><p class="k">puzzles solved${scopeLine('All time')}</p></div>
       <div class="card tile"><div class="big">${a.minutes >= 60 ? (a.minutes / 60).toFixed(1) + ' h' : a.minutes + ' min'}</div><p class="k">time trained${scopeLine('All time')}</p></div>
       <div class="card tile"><div class="big">${a.streak.longest} ${a.streak.longest === 1 ? 'day' : 'days'}</div><p class="k">longest streak${scopeLine('All time')}</p></div>
     </div>
-    <section class="card chart"><h2 class="h2" style="margin-bottom:8px">Accuracy since you started</h2><p class="scope">${esc(a.scope)}</p>${line(pts, { labels: pts.length > 1 ? [[0, fmtDay(a.weeks[0].ts)], [pts.length - 1, 'Now']] : [], marker: a.markerIdx, alt: 'Weekly accuracy since the first analysed game' })}<p class="sub small" style="margin-top:6px">Each dot is one week: the average accuracy of the games you played that week (higher is better). A dashed line joins weeks with a gap in between because you played no games then.${a.markerIdx >= 0 ? ' The dashed line marks when you started training.' : ''}</p></section>
+    <section class="card chart"><h2 class="h2" style="margin-bottom:8px">Accuracy since you started</h2><p class="scope">${esc(a.scope)}</p>${line(pts, { labels: pts.length > 1 ? [[0, fmtDay(a.weeks[0].ts)], [pts.length - 1, 'Now']] : [], marker: a.markerIdx, alt: 'Weekly accuracy since the first analyzed game' })}<p class="sub small" style="margin-top:6px">Each dot is one week: the average accuracy of the games you played that week (higher is better). A dashed line joins weeks with a gap in between because you played no games then.${a.markerIdx >= 0 ? ' The dashed line marks when you started training.' : ''}</p></section>
     ${a.patterns.length ? `<section class="card"><h2 class="h2">Mistakes per 25 games</h2><p class="scope">${esc(a.scope)}${a.enough ? '' : `, counting the latest ${plural(a.lateGames, 'game')}`}</p><p class="sub small" style="margin-bottom:6px">${a.enough ? `Your ${a.slice} games before training against your latest ${a.slice}.` : 'Your starting point. This compares properly once you have new games after training.'} Per 25 games = mistakes ÷ games counted × 25${a.lateGames === 25 ? ', so with 25 games these are the exact counts on Diagnose' : ''}. Costs are win-chance points per game, as on Diagnose.</p>${a.patterns.map((p) => pairHtml(p, a)).join('')}</section>` : ''}
     <section class="card"><h2 class="h2" style="margin-bottom:6px">Milestones</h2><p class="scope">All time</p>${a.milestones.map((m) => `<div class="mile"><time>${fmtDay(m.ts)}</time><span>${esc(m.text)}</span></div>`).join('')}</section>`;
 }
@@ -934,7 +962,7 @@ async function shareReport() {
   g.fillStyle = v('--accent'); g.font = '700 40px system-ui,sans-serif'; g.fillText('FixMyBlunder', 72, 1260);
   const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
   const file = new File([blob], 'my-chess-week.png', { type: 'image/png' });
-  try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'My chess week' }); return; } } catch { /* cancelled */ }
+  try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'My chess week' }); return; } } catch { /* canceled */ }
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'my-chess-week.png'; a.click();
   toast('Report image saved');
 }
@@ -955,24 +983,32 @@ function installRow() {
 function openSettings() {
   const s = state(), p = s.profile, st = s.settings;
   openSheet(`<h2 class="h2">Settings</h2>
-    ${p ? `<div class="settings-row"><b>${esc(sourceLabel(p.source))}: ${esc(p.username)}</b><span class="sub small">${plural(Object.keys(s.games).length, 'game')} analysed${s.lastSync ? `, last sync ${fmtDay(s.lastSync)}` : ''}</span>
+    ${p ? `<div class="settings-row"><b>${esc(sourceLabel(p.source))}: ${esc(p.username)}</b><span class="sub small">${plural(Object.keys(s.games).length, 'game')} analyzed${s.lastSync ? `, last sync ${fmtDay(s.lastSync)}` : ''}</span>
       <div class="row" style="gap:8px;margin-top:6px"><button class="btn sm" data-act="sync-from-settings">${p.source === 'pgn' ? 'Add games from PGN' : 'Sync games'}</button><button class="btn sm ghost" data-act="switch">Change account</button></div></div>` : ''}
     ${installRow()}
+    <details class="sgroup" open><summary>Training</summary>
     <div class="settings-row"><label for="setSize"><b>Drills per day</b></label><select id="setSize" data-set="setSize">${[3, 5, 8, 10, 15].map((n) => `<option value="${n}" ${st.setSize === n ? 'selected' : ''}>${n} drills, about ${Math.round(n * 1.5)} min</option>`).join('')}</select></div>
     <div class="settings-row"><label for="thinkSecs"><b>Think first: drills and puzzles</b></label><select id="thinkSecs" data-set="thinkSecs">${[[0, 'Off'], [5, '5 seconds'], [15, '15 seconds'], [30, '30 seconds'], [60, '1 minute']].map(([n, l]) => `<option value="${n}" ${(st.thinkSecs || 0) === n ? 'selected' : ''}>${l}</option>`).join('')}</select><span class="sub small">Locks the board in drills and puzzles until the time is up, so you look before you move. Many blunders come from moving too fast. Games in Play have their own Think first setting on the Play screen.</span></div>
-    <div class="settings-row"><label for="gamesN"><b>Games per sync</b></label><select id="gamesN" data-set="gamesToImport">${[25, 50, 100].map((n) => `<option value="${n}" ${st.gamesToImport === n ? 'selected' : ''}>Latest ${n}</option>`).join('')}</select></div>
+    </details>
+    <details class="sgroup"><summary>Game analysis</summary>
+    <div class="settings-row"><label for="gamesN"><b>Games per sync</b></label><select id="gamesN" data-set="gamesToImport">${GAME_COUNTS.map((n) => `<option value="${n}" ${st.gamesToImport === n ? 'selected' : ''}>Latest ${n}</option>`).join('')}</select><span class="sub small">Used for the first analysis and manual syncs. The first time you open Diagnose after launching, the app also checks your latest 100 games for new ones.</span></div>
     <div class="settings-row"><label for="eng"><b>Analysis depth</b></label><select id="eng" data-set="engineMs"><option value="40" ${st.engineMs === 40 ? 'selected' : ''}>Fast</option><option value="70" ${st.engineMs === 70 ? 'selected' : ''}>Balanced</option><option value="150" ${st.engineMs === 150 ? 'selected' : ''}>Thorough, slower</option></select><span class="sub small">Applies to games you import from now on.</span></div>
+    </details>
+    <details class="sgroup"><summary>Appearance and reminders</summary>
     <div class="settings-row"><label for="theme"><b>Theme</b></label><select id="theme" data-set="theme">${['system', 'light', 'dark'].map((t) => `<option value="${t}" ${st.theme === t ? 'selected' : ''}>${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}</select></div>
     <div class="settings-row"><label for="remTime"><b>Daily reminder</b></label>
       <input type="time" id="remTime" data-set="reminderTime" value="${esc(st.reminderTime)}">
       <span class="sub small">An app that works offline cannot ring a closed phone by itself, so this adds a repeating event with an alert to your calendar. It works on iPhone, Android and desktop.</span>
       <div class="row" style="gap:8px;margin-top:6px;flex-wrap:wrap;justify-content:flex-start"><button class="btn sm" data-act="rem-ics">Add to calendar</button>${st.reminderTime ? '<button class="btn sm ghost" data-act="rem-off">Turn off</button>' : ''}</div>
       ${st.reminderTime ? `<span class="sub small">Reminder time saved: ${esc(st.reminderTime)}. To stop the alerts, also delete the event in your calendar.</span>` : ''}</div>
+    </details>
+    <details class="sgroup"><summary>Data and help</summary>
     <div class="settings-row"><b>Feedback and problems</b><span class="sub small">${getErrors().length ? `${plural(getErrors().length, 'problem')} recorded on this device. ` : ''}Tell us what is broken or missing. You see exactly what is sent before it goes.</span>
       <div class="row" style="gap:8px;margin-top:6px;justify-content:flex-start"><button class="btn sm ghost" data-act="feedback">Send feedback</button></div></div>
     <div class="settings-row"><b>Your data</b><span class="sub small">Stored only in this browser. Back it up before clearing site data.</span>
       <div class="row" style="gap:8px;margin-top:6px;flex-wrap:wrap"><button class="btn sm ghost" data-act="export">Download backup</button><label class="btn sm ghost" style="cursor:pointer">Restore backup<input type="file" id="restore" accept="application/json" class="hide"></label></div></div>
     <div class="settings-row"><b>Reset everything</b><span class="sub small">Deletes games, drills and history from this device.</span><button class="btn sm danger" style="margin-top:6px;width:fit-content" data-act="reset">Delete all data</button></div>
+    </details>
     <p class="sub small" style="margin-top:12px">Engine: Stockfish 19 (GPLv3), running locally. Pieces: Colin M.L. Burnett (CC BY-SA 3.0). FixMyBlunder is free software under GPLv3: <a href="https://github.com/jakie127744/fixmyblunder" rel="noopener" target="_blank">source code</a>. <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a></p>
     <button class="btn" style="margin-top:12px" data-act="close">Done</button>`);
 }
@@ -1014,11 +1050,11 @@ function applyTheme() {
 function openPgnImport(err = '') {
   const p = state().profile;
   openSheet(`<h2 class="h2">Add games from PGN</h2>
-    <p class="sub small" style="margin:4px 0 10px">Paste one or more games where ${esc(p.username)} is White or Black. Games you have already analysed are skipped.</p>
+    <p class="sub small" style="margin:4px 0 10px">Paste one or more games where ${esc(p.username)} is White or Black. Games you have already analyzed are skipped.</p>
     <label class="fl" for="pgnNew">Games (PGN)</label>
     <textarea id="pgnNew" placeholder="Paste one or more games">${esc(ui.onboard.pgn)}</textarea>
     ${err ? `<div class="err" role="alert">${esc(err)}</div>` : ''}
-    <div class="stack" style="margin-top:12px"><button class="btn" data-act="pgn-import">Analyse these games</button><button class="btn ghost" data-act="close">Cancel</button></div>`);
+    <div class="stack" style="margin-top:12px"><button class="btn" data-act="pgn-import">Analyze these games</button><button class="btn ghost" data-act="close">Cancel</button></div>`);
 }
 
 function showImportResult(r, source) {
@@ -1026,7 +1062,7 @@ function showImportResult(r, source) {
   if (r.skipped.length || source === 'pgn') {
     ui.importNote = sum;
     openSheet(`<h2 class="h2">Import finished</h2><p style="margin-top:6px"><b>${esc(sum.head)}</b></p>${sum.lines.map((l) => `<p class="small" style="margin-top:6px">${esc(l)}</p>`).join('')}<button class="btn" style="margin-top:14px" data-act="close">Done</button>`);
-  } else toast(r.analysed ? `${plural(r.analysed, 'new game')} analysed, ${plural(r.drills, 'new drill')}.` : 'No new games found.');
+  } else toast(r.analysed ? `${plural(r.analysed, 'new game')} analyzed, ${plural(r.drills, 'new drill')}.` : 'No new games found.');
 }
 
 async function manualSync(count, pgn) {
@@ -1035,7 +1071,7 @@ async function manualSync(count, pgn) {
   if (s.profile.source === 'pgn' && pgn == null) { openPgnImport(); return; }   // a PGN account has nothing to fetch: ask for the games
   ui.syncing = true; render();
   try {
-    const r = await sync({ count: count || s.settings.gamesToImport, pgn: pgn || '', onStatus: (st) => { if (st.phase === 'analyse') { const b = $('[data-act="sync"]'); if (b) b.textContent = `Analysing game ${st.game} of ${st.games}`; } } });
+    const r = await sync({ count: count || s.settings.gamesToImport, pgn: pgn || '', onStatus: (st) => { if (st.phase === 'analyse') { const b = $('[data-act="sync"]'); if (b) b.textContent = `Analyzing game ${st.game} of ${st.games} · ${Math.round((((st.game - 1) + st.frac) / st.games) * 100)}%`; } } });
     ui.syncing = false; render();
     showImportResult(r, s.profile.source);
     return;
@@ -1141,6 +1177,25 @@ function reviewGraph(g, rv) {
       ${dots}<line x1="${X(rv.p)}" x2="${X(rv.p)}" y1="0" y2="${H}" stroke="var(--amber)" stroke-width="2"/></svg></section>`;
 }
 
+/** Every move as text: tap to jump, with win chance after the move and the loss on your mistakes. */
+function reviewMoves(g, rv) {
+  if (rv.mode !== 'full' || !rv.moves.length) return '';
+  const loss = {};
+  for (const m of g.mistakes) loss[m.ply] = m.wpLoss;
+  const c = g.curve || [];
+  const cell = (i) => {
+    const mv = rv.moves[i];
+    if (!mv) return '<span></span>';
+    const wp = c[i + 1] != null ? `${Math.round(c[i + 1])}%` : '';
+    const bad = loss[i] >= 12;
+    const mine = (i % 2 === 0) === (g.color === 'white');
+    return `<button class="mv ${rv.p === i + 1 ? 'cur' : ''} ${bad ? 'bad' : ''}" data-act="rv-go" data-v="${i + 1}" aria-label="${esc(`Move ${moveNo(i)}, ${mine ? 'you' : 'opponent'} played ${mv.san}${wp ? `, win chance ${wp}` : ''}${bad ? `, lost ${Math.round(loss[i])} points` : ''}`)}" ${rv.p === i + 1 ? 'aria-current="true"' : ''}><b>${esc(mv.san)}</b><small>${wp}${bad ? ` −${Math.round(loss[i])}` : ''}</small></button>`;
+  };
+  const rows = [];
+  for (let i = 0; i < rv.moves.length; i += 2) rows.push(`<span class="mn">${moveNo(i)}</span>${cell(i)}${cell(i + 1)}`);
+  return `<section class="card" style="margin-top:12px"><h2 class="h2">Moves</h2><p class="sub small" style="margin:2px 0 8px">Tap a move to jump to it. Small numbers are your win chance after the move; red marks a big mistake.</p><div class="mvlist">${rows.join('')}</div></section>`;
+}
+
 function reviewLabel(rv) {
   if (rv.mode === 'moments') return `Mistake ${rv.p + 1} of ${rv.keys.length}`;
   if (rv.p === 0) return 'Start of the game';
@@ -1176,7 +1231,7 @@ function viewReview() {
     <div class="rvctl"><button class="btn ghost" data-act="rv-prev" aria-label="Previous">\u2039</button>${middle}<button class="btn ghost" data-act="rv-next" aria-label="Next">\u203a</button></div>
     ${panel}
     ${rv.keys.length ? '<button class="btn" style="margin-top:12px" data-act="rv-nextkey">Next mistake</button>' : ''}
-    ${reviewGraph(g, rv)}</section>`;
+    ${reviewGraph(g, rv)}${reviewMoves(g, rv)}</section>`;
 }
 
 function mountReview() {
@@ -1261,11 +1316,13 @@ function renderView() {
   if (s.profile && !needsOnboard) { const st = streak(s); chip.hidden = !st.current; chip.textContent = `${st.current}-day streak`; } else chip.hidden = true;
   if (needsOnboard) { ui.board = null; view.innerHTML = viewOnboard(); return; }
   if (ui.tab === 'drills' && ui.session && !ui.drill && ui.session.idx < ui.session.ids.length) ui.drill = null;
-  $$('#tabs [data-tab]').forEach((b) => (b.dataset.tab === ui.tab ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current')));
+  const navTab = { puzzles: 'drills', diagnose: 'report' }[ui.tab] || ui.tab; // sub-screens light up their parent tab
+  $$('#tabs [data-tab]').forEach((b) => (b.dataset.tab === navTab ?b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current')));
   const due = dueCount(s), badge = $('#dueBadge');
   badge.hidden = !due; badge.textContent = due;
   if (ui.tab === 'today') view.innerHTML = viewToday();
   else if (ui.tab === 'diagnose') {
+    if (!ui.autoSynced) { ui.autoSynced = true; setTimeout(autoSync, 0); } // once per launch, the first time Diagnose opens
     if (ui.review && state().games[ui.review.id]) { view.innerHTML = viewReview(); mountReview(); save(); return; }
     ui.review = null;
     view.innerHTML = viewDiagnose();
@@ -1293,7 +1350,7 @@ document.addEventListener('click', async (e) => {
   const t = e.target.closest('[data-act], [data-tab]');
   if (e.target.id === 'scrim') { closeSheet(); return; }
   if (!t) return;
-  if (e.target.closest('a')) return; // real links keep their normal behaviour
+  if (e.target.closest('a')) return; // real links keep their normal behavior
   if (t.dataset.tab) {
     // Opening Drills after a finished set shows the practice list, not the old "Set complete" page.
     if (t.dataset.tab === 'drills' && ui.session && ui.session.idx >= ui.session.ids.length) ui.session = null;
@@ -1303,8 +1360,9 @@ document.addEventListener('click', async (e) => {
   if (a.startsWith('pl-')) { playAct(a, v, playHost); return; }
   switch (a) {
     case 'src': ui.onboard.source = v; ui.onboard.username = $('#uname')?.value || ui.onboard.username; ui.onboard.error = ''; render(); break;
+    case 'gcount': ui.onboard.username = $('#uname')?.value || ui.onboard.username; if ($('#pgn')) ui.onboard.pgn = $('#pgn').value; s.settings.gamesToImport = +v; save(); render(); break;
     case 'start': runOnboard(); break;
-    case 'start-early': ui.onboard.early = true; ui.onboard.step = 'reveal'; setBg(`Analysing in the background`, ui.onboard.progress); render(); break;
+    case 'start-early': ui.onboard.early = true; ui.onboard.step = 'reveal'; setBg(`Analyzing in the background`, ui.onboard.progress); render(); break;
     case 'finish-onboard': ui.onboard.step = 'form'; ui.onboard.error = ''; nav('today'); break;
     case 'tab': if (v === 'drills' && ui.session && ui.session.idx >= ui.session.ids.length) ui.session = null; nav(v); break;
     case 'lesson': { const b = $('#lessonBody'); const open = b.classList.toggle('hide') === false; t.textContent = open ? 'Hide' : 'Read'; t.setAttribute('aria-expanded', open); break; }
@@ -1351,6 +1409,7 @@ document.addEventListener('click', async (e) => {
       rv.p = Math.max(0, Math.min(rv.fens.length - 1, Math.round(((e.clientX - r.left) / r.width) * (rv.fens.length - 1))));
       rv.shown = ''; render(); break;
     }
+    case 'rv-go': ui.review.p = +v; ui.review.shown = ''; render(); break;
     case 'rv-mine': ui.review.shown = 'played'; ui.review.idx = 0; render(); break;
     case 'rv-best': ui.review.shown = 'best'; ui.review.idx = 0; render(); break;
     case 'lp-pick': { const h = ui.review || ui.drill; h.shown = v; h.idx = 0; refreshLesson(); break; }

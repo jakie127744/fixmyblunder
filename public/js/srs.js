@@ -27,7 +27,7 @@ export const gamesByDate = (s) => Object.values(s.games).sort((a, b) => b.date -
  *   count   = mistakes of that pattern in the given games
  *   cost    = sum of their win-chance losses (points)
  *   perGame = count / games, and costPerGame = cost / games
- *   per25   = count * 25 / games, the "per 25 games" normalisation (equals count when games is 25)
+ *   per25   = count * 25 / games, the "per 25 games" normalization (equals count when games is 25)
  */
 export function tally(games) {
   const n = games.length;
@@ -60,7 +60,7 @@ export function gradeDrill(s, id, ok, ms, meta = {}) {
   const now = Date.now();
   const early = d.box != null && d.due && d.due > dayKey(now);
   if (ok && early) {
-    // practised ahead of schedule: counts as practice, leaves the schedule alone
+    // practiced ahead of schedule: counts as practice, leaves the schedule alone
   } else if (ok) {
     const next = (d.box ?? -1) + 1;
     d.box = Math.min(next, MASTERED_BOX);

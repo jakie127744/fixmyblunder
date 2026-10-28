@@ -293,8 +293,8 @@ function actionsHtml(g) {
     const n = g.ucis.length;
     const rev = g.reviewedId ? '<button class="btn" data-act="pl-open">Open the review</button>'
       : n < 12 ? '<p class="sub small">Games under 6 moves each are too short to review.</p>'
-      : `<button class="btn" data-act="pl-review" ${g.reviewing ? 'disabled' : ''}>${g.reviewing ? 'Analysing…' : 'Review this game'}</button>`;
-    return `${rev}<button class="btn ghost" data-act="pl-rematch">Rematch, swap colours</button><button class="btn ghost" data-act="pl-new">New game</button>`;
+      : `<button class="btn" data-act="pl-review" ${g.reviewing ? 'disabled' : ''}>${g.reviewing ? 'Analyzing…' : 'Review this game'}</button>`;
+    return `${rev}<button class="btn ghost" data-act="pl-rematch">Rematch, swap colors</button><button class="btn ghost" data-act="pl-new">New game</button>`;
   }
   if (g.status === 'error') return '<button class="btn" data-act="pl-retry">Try again</button><button class="btn ghost" data-act="pl-new">Back</button>';
   const canTake = g.status === 'ask' && g.ucis.length >= 2;
@@ -374,7 +374,7 @@ export async function playAct(act, v, h) {
       if (g.reviewing || g.reviewedId) break;
       g.reviewing = true; refresh();
       try { g.reviewedId = await host.review(gameRecord(g)); }
-      catch (err) { host.toast(err.message || 'Could not analyse that game.'); }
+      catch (err) { host.toast(err.message || 'Could not analyze that game.'); }
       g.reviewing = false; refresh();
       if (g.reviewedId) host.openReview(g.reviewedId);
       break;

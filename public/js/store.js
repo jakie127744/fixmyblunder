@@ -5,7 +5,7 @@ const blank = () => ({
   v: 1,
   profile: null,               // { source, username, createdAt }
   settings: { setSize: 5, engineMs: 70, gamesToImport: 25, theme: 'system', reminderTime: '', thinkSecs: 5 },  // thinkSecs: drills and puzzles only; Play keeps its own setting (settings.play.think)
-  games: {},                   // id -> analysed game record (mistakes included)
+  games: {},                   // id -> analyzed game record (mistakes included)
   drills: {},                  // id -> drill (mistake + schedule)
   attempts: [],                // { t, id, ok, ms }
   today: null,                 // { date, ids }

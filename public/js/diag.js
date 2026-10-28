@@ -41,7 +41,7 @@ export function buildReport(note = '', { includeDetails = true, gameCount = 0 } 
       `FixMyBlunder ${APP_VERSION}`,
       `Browser: ${nav.userAgent || 'unknown'}`,
       `Installed: ${typeof matchMedia === 'function' && matchMedia('(display-mode: standalone)').matches ? 'yes' : 'no'}, online: ${nav.onLine}`,
-      `Games analysed: ${gameCount}`);
+      `Games analyzed: ${gameCount}`);
     const errs = getErrors();
     lines.push(errs.length ? `Recent errors (${errs.length}):` : 'Recent errors: none');
     for (const e of errs.slice(-8)) lines.push(`[${new Date(e.t).toISOString()}] ${e.where}${e.n > 1 ? ` x${e.n}` : ''}: ${e.msg}${e.stack ? '\n' + e.stack : ''}`);
