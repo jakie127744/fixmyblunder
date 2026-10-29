@@ -1067,10 +1067,11 @@ function openPgnImport(err = '') {
 
 function showImportResult(r, source) {
   const sum = importSummary(r, source);
-  if (r.skipped.length || source === 'pgn') {
-    ui.importNote = sum;
-    openSheet(`<h2 class="h2">Import finished</h2><p style="margin-top:6px"><b>${esc(sum.head)}</b></p>${sum.lines.map((l) => `<p class="small" style="margin-top:6px">${esc(l)}</p>`).join('')}<button class="btn" style="margin-top:14px" data-act="close">Done</button>`);
-  } else toast(r.analysed ? `${plural(r.analysed, 'new game')} analyzed, ${plural(r.drills, 'new drill')}.` : 'No new games found.');
+  ui.importNote = sum;
+  // Always a sheet, not a toast: a toast vanishes in 2.8s and is easy to miss on a phone.
+  const headline = r.analysed ? `${plural(r.analysed, 'new game')} analyzed, ${plural(r.drills, 'new drill')} added.`
+    : r.skipped.length ? 'No new games were added.' : 'No new games found. You are up to date.';
+  openSheet(`<h2 class="h2">Sync finished</h2><p style="margin-top:6px"><b>${esc(headline)}</b></p><p class="small" style="margin-top:6px">${esc(sum.head)}</p>${sum.lines.map((l) => `<p class="small" style="margin-top:6px">${esc(l)}</p>`).join('')}<button class="btn" style="margin-top:14px" data-act="close">Done</button>`);
 }
 
 async function manualSync(count, pgn) {
@@ -1078,14 +1079,19 @@ async function manualSync(count, pgn) {
   const s = state();
   if (s.profile.source === 'pgn' && pgn == null) { openPgnImport(); return; }   // a PGN account has nothing to fetch: ask for the games
   ui.syncing = true; render();
+  setBg('Checking for new games', 0);   // visible on every tab, unlike the Diagnose button
   try {
-    const r = await sync({ count: count || s.settings.gamesToImport, pgn: pgn || '', onStatus: (st) => { if (st.phase === 'analyse') { const b = $('[data-act="sync"]'); if (b) b.textContent = `Analyzing game ${st.game} of ${st.games} · ${Math.round((((st.game - 1) + st.frac) / st.games) * 100)}%`; } } });
-    ui.syncing = false; render();
+    const r = await sync({ count: count || s.settings.gamesToImport, pgn: pgn || '', onStatus: (st) => { if (st.phase === 'analyse') {
+      const pct = ((st.game - 1) + st.frac) / st.games;
+      setBg(`Analyzing new game ${st.game} of ${st.games} · ${Math.round(pct * 100)}%`, pct);
+      const b = $('[data-act="sync"]'); if (b) b.textContent = `Analyzing game ${st.game} of ${st.games} · ${Math.round(pct * 100)}%`;
+    } } });
+    ui.syncing = false; setBg(null); render();
     showImportResult(r, s.profile.source);
     return;
   } catch (e) {
     logError('sync', e);
-    ui.syncing = false; render();
+    ui.syncing = false; setBg(null); render();
     if (s.profile.source === 'pgn') openPgnImport(e.message || 'Sync failed.'); else toast(e.message || 'Sync failed.');
     return;
   }
