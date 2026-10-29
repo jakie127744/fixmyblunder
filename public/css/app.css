@@ -226,6 +226,12 @@ textarea{padding:12px 14px;min-height:130px;font-family:var(--f-mono);font-size:
   .tabs .badge{position:static;margin-left:auto}
   .cta{bottom:16px} .toast{bottom:24px}
   .board-wrap{width:min(100%,calc(100vh - 300px));min-width:320px;margin-inline:auto}
+  /* Drills and puzzles: board on the left, feedback beside it */
+  .app:has(.split){max-width:1080px}
+  .split{display:grid;grid-template-columns:minmax(320px,calc(100vh - 330px)) minmax(300px,1fr);gap:28px;align-items:start}
+  .split .board-wrap{width:100%;min-width:0;margin:14px 0 0}
+  .split-side{min-width:0;margin-top:14px}
+  .split-side .stack{margin-top:12px}
 }
 
 /* Accessibility helpers */

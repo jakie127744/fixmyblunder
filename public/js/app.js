@@ -524,9 +524,13 @@ function viewRetry() {
     <h1 class="h1" style="margin-top:12px">${dr.phase === 'ask' ? 'Find the better move' : dr.ok ? 'Good find' : 'Not quite'}</h1>
     <p class="sub">${dr.phase === 'ask' ? `You are ${me}. In your game this position cost you ${Math.round(d.wpLoss)}% win chance.` : ''}</p>
     ${thinkBox}
-    <div class="board-wrap"><div id="board"></div></div>
-    <div id="fb">${fbHtml()}</div>
-    <div class="stack" style="margin-top:12px">${actionsHtml()}</div>
+    <div class="split">
+      <div class="board-wrap"><div id="board"></div></div>
+      <div class="split-side">
+        <div id="fb">${fbHtml()}</div>
+        <div class="stack" style="margin-top:12px">${actionsHtml()}</div>
+      </div>
+    </div>
   </section>`;
 }
 
@@ -765,9 +769,13 @@ function viewPuzzle() {
     <h1 class="h1" style="margin-top:10px" id="pzTitle">${pzTitle()}</h1>
     <p class="sub" id="pzSub">${pzSub(me)}</p>
     ${thinkBox}
-    <div class="board-wrap"><div id="board"></div></div>
-    <div id="pzFb">${pzFb()}</div>
-    <div class="stack" style="margin-top:12px" id="pzActions">${pzActions()}</div></section>`;
+    <div class="split">
+      <div class="board-wrap"><div id="board"></div></div>
+      <div class="split-side">
+        <div id="pzFb">${pzFb()}</div>
+        <div class="stack" style="margin-top:12px" id="pzActions">${pzActions()}</div>
+      </div>
+    </div></section>`;
 }
 const pzTitle = () => (ui.puzzle.phase === 'solved' ? (ui.puzzle.failed ? 'Puzzle finished' : 'Solved') : 'Find the best move');
 const pzSub = (me) => (ui.puzzle.phase === 'solved' ? '' : `You are ${me}. Move ${Math.floor(ui.puzzle.step / 2) + 1} of ${solverMoves(ui.puzzle.p)}.`);
